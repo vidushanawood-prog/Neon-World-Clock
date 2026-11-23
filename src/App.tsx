@@ -1,0 +1,1538 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ArrowUpDown,
+  Bell,
+  CalendarClock,
+  Check,
+  Clock,
+  Globe2,
+  LogOut,
+  Moon,
+  Plane,
+  RotateCcw,
+  Search,
+  Star,
+  Sun,
+  UserCheck,
+  X,
+} from 'lucide-react';
+import { CONTINENTS, COUNTRIES, DEFAULT_PINNED_ISOS, type Country } from './data/countries';
+import {
+  formatClockForZone,
+  getDatePartsInZone,
+  getLocalTimeZone,
+  toDateInputValue,
+  toTimeInputValue,
+  zonedWallTimeToUtcDate,
+} from './utils/time';
+import {
+  fetchLiveExchangeRates,
+  fetchWeatherBatch,
+  getInitialExchangeRates,
+  hydrateWeatherCache,
+  type ExchangeRatesState,
+  type WeatherEntry,
+} from './services/intelligence';
+import { estimateIssPosition, fetchIssPosition, type IssPosition } from './services/iss';
+import { playAlarmChime, playHourlyChime } from './utils/audio';
+import {
+  clearActiveSession,
+  getActiveSession,
+  type AuthSession,
+} from './utils/auth';
+import { ClockCard } from './components/ClockCard';
+import { CompareModal, type CompareConfig } from './components/CompareModal';
+import { CountryModal } from './components/CountryModal';
+import { EarthGlobe } from './components/EarthGlobe';
+import { MarketStatusBar } from './components/MarketStatusBar';
+import { RouteJetLagModal } from './components/RouteJetLagModal';
+import { AlarmModal, type WorldAlarm } from './components/AlarmModal';
+import { LandingPreview } from './components/LandingPreview';
+import { AuthGate } from './components/AuthGate';
+import { CinematicBootScreen } from './components/CinematicBootScreen';
+
+type EntryStage = 'landing' | 'auth' | 'booting' | 'dashboard';
+
+type FilterTab = (typeof CONTINENTS)[number];
+type SortMode = 'name' | 'offset-asc' | 'offset-desc';
+type ClockViewMode = 'digital' | 'analog';
+type TempUnit = 'C' | 'F';
+
+const STORAGE_KEYS = {
+  PINNED: 'meridian_pinned_v1',
+  FORMAT_24H: 'meridian_format_24h',
+  THEME: 'meridian_theme',
+  CLOCK_VIEW: 'meridian_clock_view',
+  TEMP_UNIT: 'meridian_temp_unit',
+  ALARMS: 'meridian_alarms_v1',
+  HOURLY_CHIME: 'meridian_hourly_chime_v1',
+} as const;
+
+function loadPinnedFromStorage(): string[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.PINNED);
+    if (raw === null) return [...DEFAULT_PINNED_ISOS];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.filter((item): item is string => typeof item === 'string');
+    }
+    return [...DEFAULT_PINNED_ISOS];
+  } catch {
+    return [...DEFAULT_PINNED_ISOS];
+  }
+}
+
+function loadFormat24h(): boolean {
+  try {
+    return localStorage.getItem(STORAGE_KEYS.FORMAT_24H) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function loadDarkMode(): boolean {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEYS.THEME);
+    if (saved === 'light') return false;
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+function loadClockView(): ClockViewMode {
+  try {
+    return localStorage.getItem(STORAGE_KEYS.CLOCK_VIEW) === 'analog' ? 'analog' : 'digital';
+  } catch {
+    return 'digital';
+  }
+}
+
+function loadTempUnit(): TempUnit {
+  try {
+    return localStorage.getItem(STORAGE_KEYS.TEMP_UNIT) === 'F' ? 'F' : 'C';
+  } catch {
+    return 'C';
+  }
+}
+
+function loadAlarms(): WorldAlarm[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.ALARMS);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (a): a is WorldAlarm =>
+        a &&
+        typeof a.id === 'string' &&
+        typeof a.countryIso === 'string' &&
+        typeof a.time === 'string' &&
+        typeof a.label === 'string' &&
+        typeof a.enabled === 'boolean'
+    );
+  } catch {
+    return [];
+  }
+}
+
+function loadHourlyChime(): boolean {
+  try {
+    return localStorage.getItem(STORAGE_KEYS.HOURLY_CHIME) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall through to execCommand fallback
+  }
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    textarea.style.pointerEvents = 'none';
+    document.body.appendChild(textarea);
+    textarea.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+export default function App() {
+  const localTz = useMemo(() => getLocalTimeZone(), []);
+
+  // Cinematic Entry Sequence & Client-Side SHA-256 Session State
+  const [authSession, setAuthSession] = useState<AuthSession | null>(() => getActiveSession());
+  const [entryStage, setEntryStage] = useState<EntryStage>(() =>
+    getActiveSession() ? 'dashboard' : 'landing'
+  );
+
+  // Synchronized live clock driven by single rAF second-flip loop
+  const [now, setNow] = useState<Date>(() => new Date());
+  const [is24Hour, setIs24Hour] = useState<boolean>(loadFormat24h);
+  const [isDark, setIsDark] = useState<boolean>(loadDarkMode);
+  const [clockView, setClockView] = useState<ClockViewMode>(loadClockView);
+  const [tempUnit, setTempUnit] = useState<TempUnit>(loadTempUnit);
+  const [pinnedIsos, setPinnedIsos] = useState<string[]>(loadPinnedFromStorage);
+
+  // Globe & Country Quick Info Modal state
+  const [globeCollapsed, setGlobeCollapsed] = useState<boolean>(false);
+  const [focusedIso, setFocusedIso] = useState<string>(() => {
+    const initialPinned = loadPinnedFromStorage();
+    return initialPinned[0] || 'lk';
+  });
+  const [inspectedCountry, setInspectedCountry] = useState<Country | null>(null);
+
+  // Live ISS Position (polled every 6s with Keplerian orbital fallback)
+  const [issPosition, setIssPosition] = useState<IssPosition>(() => estimateIssPosition());
+
+  // Multi-Stop Route & Jet Lag Modal + World Alarms & Hourly Chime
+  const [routeModalOpen, setRouteModalOpen] = useState(false);
+  const [alarmModalOpen, setAlarmModalOpen] = useState(false);
+  const [alarms, setAlarms] = useState<WorldAlarm[]>(loadAlarms);
+  const [hourlyChimeEnabled, setHourlyChimeEnabled] = useState<boolean>(loadHourlyChime);
+  const [ringingAlarm, setRingingAlarm] = useState<{
+    alarm: WorldAlarm;
+    country: Country;
+    firedTimeLabel: string;
+  } | null>(null);
+  const triggeredAlarmKeysRef = useRef<Set<string>>(new Set());
+  const lastChimeHourRef = useRef<string>('');
+
+  // Live Weather & Exchange Rates (TTL-cached)
+  const [weatherMap, setWeatherMap] = useState<Record<string, WeatherEntry>>(() =>
+    hydrateWeatherCache()
+  );
+  const [fxState, setFxState] = useState<ExchangeRatesState>(() => getInitialExchangeRates());
+
+  // Filters & search
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeTab, setActiveTab] = useState<FilterTab>('All');
+  const [sortMode, setSortMode] = useState<SortMode>('name');
+
+  // Compare time mode
+  const [compareModalOpen, setCompareModalOpen] = useState(false);
+  const [compareConfig, setCompareConfig] = useState<CompareConfig>(() => {
+    const initial = new Date();
+    return {
+      active: false,
+      refZone: localTz,
+      refLabel: 'My Local Time',
+      dateStr: toDateInputValue(initial, localTz),
+      timeStr: toTimeInputValue(initial, localTz),
+    };
+  });
+
+  // Copy feedback & Toast
+  const [copiedIso, setCopiedIso] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ id: number; title: string; detail?: string } | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
+  const copyTimerRef = useRef<number | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const globeSectionRef = useRef<HTMLDivElement | null>(null);
+
+  // Single 60fps-friendly requestAnimationFrame clock loop (fires state update only on second flip)
+  useEffect(() => {
+    let rafId = 0;
+    let lastSecond = Math.floor(Date.now() / 1000);
+
+    const tick = () => {
+      const currentSecond = Math.floor(Date.now() / 1000);
+      if (currentSecond !== lastSecond) {
+        lastSecond = currentSecond;
+        setNow(new Date());
+      }
+      rafId = window.requestAnimationFrame(tick);
+    };
+
+    rafId = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(rafId);
+  }, []);
+
+  // Load live exchange rates once on mount (6h TTL cached)
+  useEffect(() => {
+    let cancelled = false;
+    fetchLiveExchangeRates().then((next) => {
+      if (!cancelled) setFxState(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Poll live ISS position every 6 seconds (graceful orbital fallback if offline)
+  useEffect(() => {
+    let cancelled = false;
+    const poll = () => {
+      fetchIssPosition().then((pos) => {
+        if (!cancelled) setIssPosition(pos);
+      });
+    };
+    poll();
+    const id = window.setInterval(poll, 6000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, []);
+
+  // Persist alarms & hourly chime preference
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.ALARMS, JSON.stringify(alarms));
+    } catch {
+      // Ignore
+    }
+  }, [alarms]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.HOURLY_CHIME, String(hourlyChimeEnabled));
+    } catch {
+      // Ignore
+    }
+  }, [hourlyChimeEnabled]);
+
+  // Sync dark theme class & localStorage
+  useEffect(() => {
+    const root = document.documentElement;
+    if (isDark) root.classList.add('dark');
+    else root.classList.remove('dark');
+    try {
+      localStorage.setItem(STORAGE_KEYS.THEME, isDark ? 'dark' : 'light');
+    } catch {
+      // Ignore
+    }
+  }, [isDark]);
+
+  // Persist user preferences
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.FORMAT_24H, String(is24Hour));
+    } catch {
+      // Ignore
+    }
+  }, [is24Hour]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.CLOCK_VIEW, clockView);
+    } catch {
+      // Ignore
+    }
+  }, [clockView]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.TEMP_UNIT, tempUnit);
+    } catch {
+      // Ignore
+    }
+  }, [tempUnit]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.PINNED, JSON.stringify(pinnedIsos));
+    } catch {
+      // Ignore
+    }
+  }, [pinnedIsos]);
+
+  // '/' keyboard shortcut focuses search input cleanly on dashboard
+  useEffect(() => {
+    if (entryStage !== 'dashboard') return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.key === '/' &&
+        !compareModalOpen &&
+        !inspectedCountry &&
+        !routeModalOpen &&
+        !alarmModalOpen &&
+        document.activeElement?.tagName !== 'INPUT' &&
+        document.activeElement?.tagName !== 'TEXTAREA' &&
+        document.activeElement?.tagName !== 'SELECT'
+      ) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [entryStage, compareModalOpen, inspectedCountry, routeModalOpen, alarmModalOpen]);
+
+  const showToast = useCallback((title: string, detail?: string) => {
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    setToast({ id: Date.now(), title, detail });
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast(null);
+    }, 2400);
+  }, []);
+
+  // World Alarm & Hourly Chime live evaluation engine (active on dashboard)
+  useEffect(() => {
+    if (entryStage !== 'dashboard') return;
+    const countryMap = new Map(COUNTRIES.map((c) => [c.iso, c]));
+
+    // 1. Check enabled world alarms
+    for (const alarm of alarms) {
+      if (!alarm.enabled) continue;
+      const country = countryMap.get(alarm.countryIso);
+      if (!country) continue;
+      const parts = getDatePartsInZone(now, country.timezone);
+      const hhmm = `${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}`;
+      const minuteKey = `${alarm.id}|${parts.year}-${parts.month}-${parts.day}|${hhmm}`;
+
+      if (hhmm === alarm.time && parts.second <= 2 && !triggeredAlarmKeysRef.current.has(minuteKey)) {
+        triggeredAlarmKeysRef.current.add(minuteKey);
+        const formatted = formatClockForZone(now, country.timezone, is24Hour);
+        const firedTimeLabel = `${formatted.hours}:${formatted.minutes}${
+          !is24Hour && formatted.dayPeriod ? ` ${formatted.dayPeriod}` : ''
+        }`;
+        playAlarmChime();
+        setRingingAlarm({ alarm, country, firedTimeLabel });
+      }
+    }
+
+    // 2. Check Hourly Chime at local :00:00
+    if (hourlyChimeEnabled) {
+      const localParts = getDatePartsInZone(now, localTz);
+      const hourKey = `${localParts.year}-${localParts.month}-${localParts.day}-${localParts.hour}`;
+      if (localParts.minute === 0 && localParts.second <= 1 && lastChimeHourRef.current !== hourKey) {
+        lastChimeHourRef.current = hourKey;
+        playHourlyChime();
+        const formattedLocal = formatClockForZone(now, localTz, is24Hour);
+        showToast(
+          'Hourly Chime',
+          `Local time is ${formattedLocal.hours}:00${!is24Hour && formattedLocal.dayPeriod ? ` ${formattedLocal.dayPeriod}` : ''}`
+        );
+      }
+    }
+  }, [entryStage, now, alarms, hourlyChimeEnabled, localTz, is24Hour, showToast]);
+
+  const handleAddAlarm = useCallback(
+    (input: Omit<WorldAlarm, 'id'>) => {
+      const next: WorldAlarm = {
+        ...input,
+        id: `alarm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      };
+      setAlarms((prev) => [next, ...prev]);
+      const c = COUNTRIES.find((item) => item.iso === input.countryIso);
+      showToast('Alarm scheduled', `${input.time} in ${c?.name || input.countryIso.toUpperCase()}`);
+    },
+    [showToast]
+  );
+
+  const handleToggleAlarm = useCallback((id: string) => {
+    setAlarms((prev) => prev.map((a) => (a.id === id ? { ...a, enabled: !a.enabled } : a)));
+  }, []);
+
+  const handleDeleteAlarm = useCallback((id: string) => {
+    setAlarms((prev) => prev.filter((a) => a.id !== id));
+  }, []);
+
+  const handleSnoozeAlarm = useCallback(() => {
+    if (!ringingAlarm) return;
+    const { alarm, country } = ringingAlarm;
+    const parts = getDatePartsInZone(new Date(Date.now() + 5 * 60_000), country.timezone);
+    const snoozeTime = `${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}`;
+    setAlarms((prev) => [
+      {
+        id: `snooze_${Date.now()}`,
+        countryIso: alarm.countryIso,
+        time: snoozeTime,
+        label: `${alarm.label} (Snoozed)`,
+        enabled: true,
+      },
+      ...prev,
+    ]);
+    setRingingAlarm(null);
+    showToast('Snoozed 5 minutes', `Will ring at ${snoozeTime} (${country.capital})`);
+  }, [ringingAlarm, showToast]);
+
+  const handleTogglePin = useCallback(
+    (iso: string) => {
+      setPinnedIsos((prev) => {
+        const exists = prev.includes(iso);
+        const country = COUNTRIES.find((c) => c.iso === iso);
+        if (exists) {
+          if (country) showToast('Unpinned', `${country.name} removed from favorites`);
+          return prev.filter((item) => item !== iso);
+        } else {
+          if (country) showToast('Pinned to top', `${country.name} added to favorites`);
+          return [iso, ...prev];
+        }
+      });
+    },
+    [showToast]
+  );
+
+  const handleCopyCard = useCallback(
+    async (country: Country, formattedText: string) => {
+      await copyToClipboard(formattedText);
+      if (copyTimerRef.current) window.clearTimeout(copyTimerRef.current);
+      setCopiedIso(country.iso);
+      copyTimerRef.current = window.setTimeout(() => {
+        setCopiedIso(null);
+      }, 1800);
+      showToast('Copied!', `${country.name} (${country.capital})`);
+    },
+    [showToast]
+  );
+
+  const handleFocusGlobe = useCallback(
+    (country: Country, scrollToGlobe = true) => {
+      setFocusedIso(country.iso);
+      setGlobeCollapsed(false);
+      // Ensure weather is loaded for the focused country
+      fetchWeatherBatch([country]).then((updated) => setWeatherMap(updated));
+      if (scrollToGlobe && globeSectionRef.current) {
+        globeSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    },
+    []
+  );
+
+  const handleOpenDetails = useCallback((country: Country) => {
+    setFocusedIso(country.iso);
+    setInspectedCountry(country);
+    fetchWeatherBatch([country]).then((updated) => setWeatherMap(updated));
+  }, []);
+
+  // Focused country object for 3D Globe
+  const focusedCountry = useMemo(() => {
+    return COUNTRIES.find((c) => c.iso === focusedIso) || COUNTRIES[0];
+  }, [focusedIso]);
+
+  // Determine exact instant displayed across all clocks
+  const displayDate = useMemo(() => {
+    if (!compareConfig.active) return now;
+    return zonedWallTimeToUtcDate(
+      compareConfig.dateStr,
+      compareConfig.timeStr,
+      compareConfig.refZone
+    );
+  }, [compareConfig, now]);
+
+  const referenceZone = compareConfig.active ? compareConfig.refZone : localTz;
+  const referenceClock = useMemo(
+    () => formatClockForZone(displayDate, referenceZone, is24Hour),
+    [displayDate, referenceZone, is24Hour]
+  );
+
+  const liveLocalClock = useMemo(
+    () => formatClockForZone(now, localTz, is24Hour),
+    [now, localTz, is24Hour]
+  );
+
+  const pinnedSet = useMemo(() => new Set(pinnedIsos), [pinnedIsos]);
+
+  const pinnedCountriesOrdered = useMemo(() => {
+    const byIso = new Map(COUNTRIES.map((c) => [c.iso, c]));
+    return pinnedIsos
+      .map((iso) => byIso.get(iso))
+      .filter((c): c is Country => Boolean(c));
+  }, [pinnedIsos]);
+
+  const tabCounts = useMemo(() => {
+    const counts: Record<FilterTab, number> = {
+      All: COUNTRIES.length,
+      Favorites: pinnedIsos.length,
+      Asia: 0,
+      Europe: 0,
+      'North America': 0,
+      'South America': 0,
+      Africa: 0,
+      Oceania: 0,
+    };
+    for (const c of COUNTRIES) {
+      counts[c.continent] += 1;
+    }
+    return counts;
+  }, [pinnedIsos.length]);
+
+  // Compute UTC offset minutes map ONLY when sorting by offset
+  const offsetSortMinuteKey = Math.floor(displayDate.getTime() / 60000);
+  const offsetMap = useMemo(() => {
+    if (sortMode === 'name') return null;
+    const map = new Map<string, number>();
+    const sampleDate = new Date(offsetSortMinuteKey * 60000);
+    for (const c of COUNTRIES) {
+      map.set(c.iso, formatClockForZone(sampleDate, c.timezone, true).offsetMinutes);
+    }
+    return map;
+  }, [sortMode, offsetSortMinuteKey]);
+
+  // Filtered & sorted lists (searches country, capital, currency, timezone, continent, ISO)
+  const { pinnedVisible, regularVisible, totalMatched } = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+
+    const matchesQuery = (c: Country) => {
+      if (!q) return true;
+      return (
+        c.name.toLowerCase().includes(q) ||
+        c.capital.toLowerCase().includes(q) ||
+        c.currency.toLowerCase().includes(q) ||
+        c.timezone.toLowerCase().includes(q) ||
+        c.continent.toLowerCase().includes(q) ||
+        c.iso.toLowerCase() === q
+      );
+    };
+
+    const sortList = (list: Country[]) => {
+      if (sortMode === 'name') {
+        return [...list].sort((a, b) => a.name.localeCompare(b.name));
+      }
+      if (!offsetMap) return list;
+      return [...list].sort((a, b) => {
+        const diff = (offsetMap.get(a.iso) ?? 0) - (offsetMap.get(b.iso) ?? 0);
+        if (diff !== 0) return sortMode === 'offset-asc' ? diff : -diff;
+        return a.name.localeCompare(b.name);
+      });
+    };
+
+    if (activeTab === 'Favorites') {
+      const matchedFavs = pinnedCountriesOrdered.filter(matchesQuery);
+      return {
+        pinnedVisible: [],
+        regularVisible: sortMode === 'name' ? matchedFavs : sortList(matchedFavs),
+        totalMatched: matchedFavs.length,
+      };
+    }
+
+    const continentMatches = COUNTRIES.filter(
+      (c) => (activeTab === 'All' || c.continent === activeTab) && matchesQuery(c)
+    );
+
+    const pinnedList: Country[] = [];
+    const regularList: Country[] = [];
+
+    for (const c of continentMatches) {
+      if (pinnedSet.has(c.iso)) {
+        pinnedList.push(c);
+      } else {
+        regularList.push(c);
+      }
+    }
+
+    pinnedList.sort((a, b) => pinnedIsos.indexOf(a.iso) - pinnedIsos.indexOf(b.iso));
+
+    return {
+      pinnedVisible: sortMode === 'name' ? pinnedList : sortList(pinnedList),
+      regularVisible: sortList(regularList),
+      totalMatched: continentMatches.length,
+    };
+  }, [activeTab, searchQuery, sortMode, offsetMap, pinnedSet, pinnedIsos, pinnedCountriesOrdered]);
+
+  // Smart batched Open-Meteo weather prefetching (warms up during boot & active dashboard)
+  useEffect(() => {
+    if (entryStage !== 'booting' && entryStage !== 'dashboard') return;
+    let cancelled = false;
+    const priorityList: Country[] = [];
+    const seen = new Set<string>();
+
+    const pushUnique = (c: Country) => {
+      if (!seen.has(c.iso)) {
+        seen.add(c.iso);
+        priorityList.push(c);
+      }
+    };
+
+    pushUnique(focusedCountry);
+    pinnedVisible.forEach(pushUnique);
+    regularVisible.forEach(pushUnique);
+
+    const runBatches = async () => {
+      // Lazy/throttled prefetch: fetch up to 50 prioritized locations per view (2 batches of 25)
+      // so expanding to 215+ regions never hits Open-Meteo rate limits; clicking/inspecting any card fetches on demand.
+      const limit = Math.min(priorityList.length, 50);
+      for (let offset = 0; offset < limit; offset += 25) {
+        if (cancelled) return;
+        const slice = priorityList.slice(offset, Math.min(offset + 25, limit));
+        const updated = await fetchWeatherBatch(slice);
+        if (cancelled) return;
+        setWeatherMap(updated);
+        if (offset + 25 < limit) {
+          await new Promise((r) => window.setTimeout(r, 420));
+        }
+      }
+    };
+
+    // Debounce slightly when user is actively typing in search
+    const timer = window.setTimeout(runBatches, searchQuery ? 300 : 80);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [entryStage, activeTab, searchQuery, focusedCountry, pinnedVisible, regularVisible]);
+
+  // Entry sequence handlers
+  const handleAuthenticated = useCallback((session: AuthSession) => {
+    setAuthSession(session);
+    setEntryStage('booting');
+  }, []);
+
+  const handleBootComplete = useCallback(() => {
+    setEntryStage('dashboard');
+    window.scrollTo({ top: 0, behavior: 'auto' });
+    showToast('Command Center Active', 'All 215 regions and orbital telemetry synced');
+  }, [showToast]);
+
+  const handleLogout = useCallback(() => {
+    clearActiveSession();
+    setAuthSession(null);
+    setCompareModalOpen(false);
+    setInspectedCountry(null);
+    setRouteModalOpen(false);
+    setAlarmModalOpen(false);
+    setRingingAlarm(null);
+    setEntryStage('landing');
+    window.scrollTo({ top: 0, behavior: 'auto' });
+  }, []);
+
+  // Inline Compare Bar handlers
+  const handleInlineSlider = (mins: number) => {
+    const h = Math.floor(mins / 60) % 24;
+    const m = mins % 60;
+    setCompareConfig((prev) => ({
+      ...prev,
+      timeStr: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`,
+    }));
+  };
+
+  const handleInlineShift = (deltaHours: number) => {
+    const shifted = new Date(displayDate.getTime() + deltaHours * 3600 * 1000);
+    setCompareConfig((prev) => ({
+      ...prev,
+      dateStr: toDateInputValue(shifted, prev.refZone),
+      timeStr: toTimeInputValue(shifted, prev.refZone),
+    }));
+  };
+
+  const handleResetLive = () => {
+    setCompareConfig((prev) => ({ ...prev, active: false }));
+    showToast('Live mode restored', 'Clocks synchronized to real time');
+  };
+
+  const compareSliderMinutes = useMemo(() => {
+    const [hh, mm] = compareConfig.timeStr.split(':').map(Number);
+    const total = (Number.isNaN(hh) ? 12 : hh) * 60 + (Number.isNaN(mm) ? 0 : mm);
+    return Math.min(1425, Math.round(total / 15) * 15);
+  }, [compareConfig.timeStr]);
+
+  // Stage 1: Landing Preview Page
+  if (entryStage === 'landing') {
+    return (
+      <LandingPreview
+        now={now}
+        issPosition={issPosition}
+        onLaunch={() => setEntryStage('auth')}
+      />
+    );
+  }
+
+  // Stage 2: Client-Side Email/Password Auth + Interactive Human Verification Gate
+  if (entryStage === 'auth') {
+    return (
+      <AuthGate
+        onBack={() => setEntryStage('landing')}
+        onAuthenticated={handleAuthenticated}
+      />
+    );
+  }
+
+  // Stage 3: 10-Second Animated Cinematic Boot / Loading Screen
+  if (entryStage === 'booting') {
+    return (
+      <CinematicBootScreen
+        operatorEmail={authSession?.email || 'operator@meridian.local'}
+        onComplete={handleBootComplete}
+      />
+    );
+  }
+
+  return (
+    <div className="relative min-h-screen text-slate-900 dark:text-slate-100">
+      {/* Subtle Cosmic Atmospheric Background */}
+      <div className="ambient-canvas" aria-hidden="true" />
+
+      {/* Sticky Top Navigation Bar (Single-row, 64px height, zero horizontal overflow) */}
+      <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/80 backdrop-blur-xl dark:border-white/[0.07] dark:bg-slate-950/80">
+        <div className="mx-auto flex h-16 max-w-[1380px] items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
+          {/* Brand Wordmark */}
+          <a
+            href="#top"
+            onClick={(e) => {
+              e.preventDefault();
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+            className="flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+          >
+            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-sky-600 text-white shadow-sm dark:bg-sky-500/20 dark:text-sky-400 dark:ring-1 dark:ring-sky-400/30">
+              <Globe2 className="h-4 w-4" aria-hidden="true" />
+            </span>
+            <span className="text-lg font-bold tracking-tight text-slate-950 dark:text-white">
+              Meridian
+            </span>
+          </a>
+
+          {/* Center Local Readout (XL Desktop) */}
+          <div className="hidden items-center gap-2 text-xs text-slate-500 xl:flex dark:text-slate-400 whitespace-nowrap">
+            <span>Local</span>
+            <span aria-hidden="true" className="text-slate-300 dark:text-slate-600">
+              ·
+            </span>
+            <span className="tabular-clock font-semibold text-slate-900 dark:text-slate-100">
+              {liveLocalClock.hours}:{liveLocalClock.minutes}:{liveLocalClock.seconds}
+              {!is24Hour && liveLocalClock.dayPeriod ? ` ${liveLocalClock.dayPeriod}` : ''}
+            </span>
+            <span aria-hidden="true" className="text-slate-300 dark:text-slate-600">
+              ·
+            </span>
+            <span className="tabular-clock">{liveLocalClock.utcOffset}</span>
+          </div>
+
+          {/* Right Controls: Analog/Digital, 12H/24H, °C/°F, Compare, Theme */}
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+            {/* Digital / Analog View Toggle */}
+            <div
+              role="group"
+              aria-label="Clock display mode"
+              className="flex items-center rounded-xl border border-slate-200/90 bg-slate-100/80 p-0.5 dark:border-white/10 dark:bg-slate-900/80"
+            >
+              <button
+                type="button"
+                onClick={() => setClockView('digital')}
+                aria-pressed={clockView === 'digital'}
+                className={`rounded-[9px] px-2 py-1.5 text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 sm:px-2.5 sm:text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
+                  clockView === 'digital'
+                    ? 'bg-white text-slate-950 shadow-xs dark:bg-slate-800 dark:text-white'
+                    : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+                }`}
+              >
+                Digital
+              </button>
+              <button
+                type="button"
+                onClick={() => setClockView('analog')}
+                aria-pressed={clockView === 'analog'}
+                className={`rounded-[9px] px-2 py-1.5 text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 sm:px-2.5 sm:text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
+                  clockView === 'analog'
+                    ? 'bg-white text-slate-950 shadow-xs dark:bg-slate-800 dark:text-white'
+                    : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+                }`}
+              >
+                Analog
+              </button>
+            </div>
+
+            {/* 12H / 24H Toggle */}
+            <div
+              role="group"
+              aria-label="Time format"
+              className="hidden items-center rounded-xl border border-slate-200/90 bg-slate-100/80 p-0.5 sm:flex dark:border-white/10 dark:bg-slate-900/80"
+            >
+              <button
+                type="button"
+                onClick={() => setIs24Hour(false)}
+                aria-pressed={!is24Hour}
+                className={`rounded-[9px] px-2 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
+                  !is24Hour
+                    ? 'bg-white text-slate-950 shadow-xs dark:bg-slate-800 dark:text-white'
+                    : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+                }`}
+              >
+                12H
+              </button>
+              <button
+                type="button"
+                onClick={() => setIs24Hour(true)}
+                aria-pressed={is24Hour}
+                className={`rounded-[9px] px-2 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
+                  is24Hour
+                    ? 'bg-white text-slate-950 shadow-xs dark:bg-slate-800 dark:text-white'
+                    : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
+                }`}
+              >
+                24H
+              </button>
+            </div>
+
+            {/* °C / °F Temperature Unit Toggle */}
+            <button
+              type="button"
+              onClick={() => setTempUnit((u) => (u === 'C' ? 'F' : 'C'))}
+              aria-label={`Switch temperature to °${tempUnit === 'C' ? 'F' : 'C'}`}
+              title="Toggle Celsius / Fahrenheit"
+              className="tabular-clock flex h-9 min-w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200/90 bg-white/90 px-2 text-xs font-semibold text-slate-700 transition-colors hover:border-slate-300 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-200 dark:hover:bg-white/[0.11] dark:hover:text-white"
+            >
+              °{tempUnit}
+            </button>
+
+            {/* Flight Route & Jet Lag Calculator Trigger */}
+            <button
+              type="button"
+              onClick={() => setRouteModalOpen(true)}
+              aria-label="Open Multi-Stop Route & Jet Lag Calculator"
+              title="Route, Layover & Jet Lag Calculator"
+              className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-slate-200/90 bg-white/90 px-2.5 text-xs font-semibold text-slate-800 transition-colors hover:border-slate-300 hover:bg-white whitespace-nowrap shrink-0 lg:px-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-100 dark:hover:bg-white/[0.11]"
+            >
+              <Plane className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400" aria-hidden="true" />
+              <span className="hidden lg:inline">Jet Lag</span>
+            </button>
+
+            {/* World Alarms & Hourly Chime Trigger */}
+            <button
+              type="button"
+              onClick={() => setAlarmModalOpen(true)}
+              aria-label="Open World Alarms & Hourly Chime"
+              title="World Alarms & Hourly Chime"
+              className={`inline-flex h-9 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 lg:px-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
+                alarms.some((a) => a.enabled) || hourlyChimeEnabled
+                  ? 'border-amber-300/90 bg-amber-50/90 text-amber-800 hover:bg-amber-100/80 dark:border-amber-400/35 dark:bg-amber-400/12 dark:text-amber-200 dark:hover:bg-amber-400/20'
+                  : 'border-slate-200/90 bg-white/90 text-slate-800 hover:border-slate-300 hover:bg-white dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-100 dark:hover:bg-white/[0.11]'
+              }`}
+            >
+              <Bell className="h-3.5 w-3.5" aria-hidden="true" />
+              <span className="hidden lg:inline">Alarms</span>
+              {alarms.filter((a) => a.enabled).length > 0 && (
+                <span className="tabular-clock text-[11px] font-bold">
+                  {alarms.filter((a) => a.enabled).length}
+                </span>
+              )}
+            </button>
+
+            {/* Compare Time Button */}
+            <button
+              type="button"
+              onClick={() => setCompareModalOpen(true)}
+              className={`inline-flex h-9 items-center gap-1.5 rounded-xl px-2.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 lg:px-3.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
+                compareConfig.active
+                  ? 'bg-sky-600 text-white shadow-sm hover:bg-sky-500 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400'
+                  : 'border border-slate-200/90 bg-white/90 text-slate-800 hover:border-slate-300 hover:bg-white dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-100 dark:hover:bg-white/[0.11]'
+              }`}
+            >
+              <CalendarClock className="h-3.5 w-3.5" aria-hidden="true" />
+              <span className="hidden lg:inline">
+                {compareConfig.active ? 'Comparing' : 'Compare'}
+              </span>
+            </button>
+
+            {/* Dark / Light Theme Switch */}
+            <button
+              type="button"
+              onClick={() => setIsDark((d) => !d)}
+              aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+              title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200/90 bg-white/90 text-slate-700 transition-colors hover:border-slate-300 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-200 dark:hover:bg-white/[0.11] dark:hover:text-white"
+            >
+              {isDark ? (
+                <Sun className="h-4 w-4 text-amber-300" aria-hidden="true" />
+              ) : (
+                <Moon className="h-4 w-4 text-indigo-600" aria-hidden="true" />
+              )}
+            </button>
+
+            {/* Authenticated Operator Email + Logout Control */}
+            {authSession && (
+              <>
+                <span
+                  aria-hidden="true"
+                  className="mx-0.5 hidden h-5 w-px bg-slate-200 sm:block dark:bg-white/12"
+                />
+                <div
+                  title={`Signed in as ${authSession.email}`}
+                  className="hidden items-center gap-1.5 text-xs text-slate-600 2xl:flex dark:text-slate-300"
+                >
+                  <UserCheck
+                    className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400"
+                    aria-hidden="true"
+                  />
+                  <span className="max-w-[165px] truncate font-medium">{authSession.email}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  aria-label={`Log out ${authSession.email}`}
+                  title={`Log out (${authSession.email})`}
+                  className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-slate-200/90 bg-white/90 px-2.5 text-xs font-semibold text-slate-700 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-200 dark:hover:border-rose-400/40 dark:hover:bg-rose-500/15 dark:hover:text-rose-200"
+                >
+                  <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span className="hidden md:inline">Logout</span>
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content Container */}
+      <main id="top" className="relative z-10 mx-auto max-w-[1380px] px-4 pt-7 pb-20 sm:px-6 lg:px-8">
+        {/* Hero Title & Local Time Summary Row */}
+        <section className="flex flex-col justify-between gap-4 pb-6 lg:flex-row lg:items-end">
+          <div className="max-w-2xl">
+            <h1 className="text-2xl font-bold tracking-tight text-slate-950 sm:text-4xl dark:text-white [text-wrap:balance]">
+              World Clock &amp; Global Intelligence
+            </h1>
+            <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600 sm:text-sm dark:text-slate-400">
+              <span>{COUNTRIES.length} countries</span>
+              <span aria-hidden="true" className="text-slate-300 dark:text-slate-600">
+                ·
+              </span>
+              <span>Live IANA time &amp; weather</span>
+              <span aria-hidden="true" className="text-slate-300 dark:text-slate-600">
+                ·
+              </span>
+              <span>
+                LKR &amp; USD {fxState.isLive ? 'live rates' : 'reference rates'}
+              </span>
+              <span aria-hidden="true" className="text-slate-300 dark:text-slate-600">
+                ·
+              </span>
+              <span>{pinnedIsos.length} pinned</span>
+              {authSession && (
+                <>
+                  <span aria-hidden="true" className="text-slate-300 dark:text-slate-600 2xl:hidden">
+                    ·
+                  </span>
+                  <span className="truncate font-medium text-emerald-700 dark:text-emerald-300 2xl:hidden">
+                    {authSession.email}
+                  </span>
+                </>
+              )}
+            </p>
+          </div>
+
+          {/* Mobile 12H/24H Quick Toggle + Local Clock */}
+          <div className="flex items-center justify-between gap-4 border-t border-slate-200/80 pt-3 lg:flex-col lg:items-end lg:gap-0.5 lg:border-t-0 lg:pt-0 dark:border-white/[0.08]">
+            <div className="flex items-baseline gap-1.5">
+              <span className="tabular-clock text-xl font-semibold tracking-tight text-slate-950 sm:text-2xl dark:text-white">
+                {liveLocalClock.hours}:{liveLocalClock.minutes}
+                <span className="text-base font-medium text-slate-400 dark:text-slate-500">
+                  :{liveLocalClock.seconds}
+                </span>
+              </span>
+              {!is24Hour && liveLocalClock.dayPeriod && (
+                <span className="tabular-clock text-xs font-semibold text-sky-600 dark:text-sky-400">
+                  {liveLocalClock.dayPeriod}
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+              <span className="hidden sm:inline">{liveLocalClock.fullDate} ·</span>
+              <span className="tabular-clock">{localTz}</span>
+              <button
+                type="button"
+                onClick={() => setIs24Hour((v) => !v)}
+                className="rounded-lg border border-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-700 sm:hidden dark:border-white/10 dark:text-slate-200"
+              >
+                {is24Hour ? '24H' : '12H'}
+              </button>
+            </div>
+          </div>
+        </section>
+
+        {/* Interactive 3D Rotating Earth Globe Hero (with Live ISS Tracker) */}
+        <div ref={globeSectionRef}>
+          <EarthGlobe
+            countries={COUNTRIES}
+            focusedCountry={focusedCountry}
+            issPosition={issPosition}
+            pinnedSet={pinnedSet}
+            displayDate={displayDate}
+            is24Hour={is24Hour}
+            tempUnit={tempUnit}
+            weatherMap={weatherMap}
+            rates={fxState.rates}
+            collapsed={globeCollapsed}
+            onToggleCollapse={() => setGlobeCollapsed((c) => !c)}
+            onSelectCountry={(country) => handleFocusGlobe(country, false)}
+            onInspectCountry={handleOpenDetails}
+          />
+        </div>
+
+        {/* Global Stock Market Open / Close Status Bar */}
+        <MarketStatusBar
+          displayDate={displayDate}
+          onSelectCountryIso={(iso) => {
+            const target = COUNTRIES.find((c) => c.iso === iso);
+            if (target) handleFocusGlobe(target, true);
+          }}
+        />
+
+        {/* Active Compare Time Inline Scrubber Bar */}
+        {compareConfig.active && (
+          <section
+            aria-label="Active time comparison controls"
+            className="mb-6 rounded-2xl border border-sky-200/90 bg-sky-50/85 p-4 backdrop-blur-xl dark:border-sky-400/25 dark:bg-sky-950/35"
+          >
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-semibold text-sky-700 dark:text-sky-300">
+                  <CalendarClock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span>Comparing Time</span>
+                  <span aria-hidden="true" className="text-sky-400/60">
+                    ·
+                  </span>
+                  <span className="truncate">{compareConfig.refLabel}</span>
+                </div>
+                <div className="mt-1 flex flex-wrap items-baseline gap-x-2 text-sm text-slate-800 dark:text-slate-100">
+                  <span className="tabular-clock font-bold">
+                    {referenceClock.hours}:{referenceClock.minutes}
+                    {!is24Hour && referenceClock.dayPeriod ? ` ${referenceClock.dayPeriod}` : ''}
+                  </span>
+                  <span className="text-slate-500 dark:text-slate-400">
+                    {referenceClock.fullDate} ({referenceClock.utcOffset})
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex flex-1 flex-col gap-1.5 lg:max-w-md">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleInlineShift(-1)}
+                    className="rounded-lg border border-sky-200 bg-white/80 px-2 py-1 text-xs font-semibold text-slate-700 transition-colors hover:bg-white dark:border-sky-400/25 dark:bg-slate-900/70 dark:text-slate-200 dark:hover:bg-slate-900"
+                  >
+                    -1h
+                  </button>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1425}
+                    step={15}
+                    value={compareSliderMinutes}
+                    onChange={(e) => handleInlineSlider(Number(e.target.value))}
+                    aria-label="Adjust comparison time"
+                    className="time-slider flex-1 bg-sky-200/80 dark:bg-sky-900/80"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleInlineShift(1)}
+                    className="rounded-lg border border-sky-200 bg-white/80 px-2 py-1 text-xs font-semibold text-slate-700 transition-colors hover:bg-white dark:border-sky-400/25 dark:bg-slate-900/70 dark:text-slate-200 dark:hover:bg-slate-900"
+                  >
+                    +1h
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCompareModalOpen(true)}
+                  className="rounded-xl border border-sky-300/80 bg-white/80 px-3.5 py-2 text-xs font-semibold text-slate-800 transition-colors hover:bg-white whitespace-nowrap dark:border-sky-400/25 dark:bg-slate-900/70 dark:text-slate-100 dark:hover:bg-slate-900"
+                >
+                  Change Zone / Date
+                </button>
+                <button
+                  type="button"
+                  onClick={handleResetLive}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-slate-800 whitespace-nowrap dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                  Return to Live
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* Search, Sort & Continent Filter Workspace Toolbar */}
+        <section aria-label="Search and filter countries" className="mb-8 space-y-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            {/* Search Bar */}
+            <div className="relative flex-1">
+              <Search
+                className="pointer-events-none absolute top-1/2 left-4 h-4 w-4 -translate-y-1/2 text-slate-400 dark:text-slate-500"
+                aria-hidden="true"
+              />
+              <input
+                ref={searchInputRef}
+                type="search"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search country, capital, currency (LKR, USD, JPY), or timezone..."
+                aria-label="Search countries, capitals, currencies, or timezones"
+                className="h-12 w-full rounded-2xl border border-slate-200/90 bg-white/85 pr-11 pl-11 text-sm text-slate-900 shadow-[0_2px_10px_-4px_rgba(15,23,42,0.05)] backdrop-blur-xl placeholder:text-slate-400 focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-500/20 dark:border-white/[0.1] dark:bg-slate-900/65 dark:text-white dark:shadow-none dark:placeholder:text-slate-500 dark:focus:border-sky-400"
+              />
+              {searchQuery ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery('');
+                    searchInputRef.current?.focus();
+                  }}
+                  aria-label="Clear search"
+                  className="absolute top-1/2 right-3 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-white/[0.08] dark:hover:text-slate-200"
+                >
+                  <X className="h-4 w-4" aria-hidden="true" />
+                </button>
+              ) : (
+                <kbd
+                  aria-hidden="true"
+                  className="pointer-events-none absolute top-1/2 right-3.5 hidden -translate-y-1/2 rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[11px] text-slate-400 sm:inline-block dark:border-white/10 dark:bg-slate-800/80 dark:text-slate-500"
+                >
+                  /
+                </kbd>
+              )}
+            </div>
+
+            {/* Sort Selector */}
+            <div className="relative shrink-0">
+              <ArrowUpDown
+                className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400"
+                aria-hidden="true"
+              />
+              <select
+                value={sortMode}
+                onChange={(e) => setSortMode(e.target.value as SortMode)}
+                aria-label="Sort countries"
+                className="h-12 w-full appearance-none rounded-2xl border border-slate-200/90 bg-white/85 pr-9 pl-10 text-sm font-medium text-slate-700 shadow-[0_2px_10px_-4px_rgba(15,23,42,0.05)] backdrop-blur-xl focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-500/20 sm:w-auto dark:border-white/[0.1] dark:bg-slate-900/65 dark:text-slate-200 dark:shadow-none dark:focus:border-sky-400"
+              >
+                <option value="name">Sort: A – Z</option>
+                <option value="offset-asc">UTC: West to East</option>
+                <option value="offset-desc">UTC: East to West</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Continent Filter Tabs */}
+          <div
+            role="tablist"
+            aria-label="Filter by continent"
+            className="no-scrollbar flex items-center gap-1.5 overflow-x-auto pb-1"
+          >
+            {CONTINENTS.map((tab) => {
+              const isActive = activeTab === tab;
+              const count = tabCounts[tab];
+              return (
+                <button
+                  key={tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  onClick={() => setActiveTab(tab)}
+                  className={`inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-semibold transition-all whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
+                    isActive
+                      ? 'bg-slate-900 text-white shadow-sm dark:bg-sky-500 dark:text-slate-950'
+                      : 'border border-slate-200/80 bg-white/70 text-slate-600 hover:border-slate-300 hover:bg-white hover:text-slate-900 dark:border-white/[0.08] dark:bg-slate-900/50 dark:text-slate-300 dark:hover:border-white/[0.16] dark:hover:bg-slate-900/80 dark:hover:text-white'
+                  }`}
+                >
+                  {tab === 'Favorites' && (
+                    <Star
+                      className={`h-3.5 w-3.5 ${
+                        isActive ? 'text-amber-300 dark:text-slate-950' : 'text-amber-500 dark:text-amber-400'
+                      }`}
+                      fill="currentColor"
+                      aria-hidden="true"
+                    />
+                  )}
+                  <span>{tab}</span>
+                  <span
+                    className={`tabular-clock text-[11px] font-medium ${
+                      isActive
+                        ? 'text-slate-300 dark:text-slate-900/75'
+                        : 'text-slate-400 dark:text-slate-500'
+                    }`}
+                  >
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* Empty State */}
+        {totalMatched === 0 ? (
+          <section className="flex flex-col items-center justify-center rounded-2xl border border-slate-200/80 bg-white/75 px-6 py-16 text-center backdrop-blur-xl dark:border-white/[0.08] dark:bg-slate-900/50">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-400 dark:bg-white/[0.06] dark:text-slate-500">
+              {activeTab === 'Favorites' && !searchQuery ? (
+                <Star className="h-5 w-5" aria-hidden="true" />
+              ) : (
+                <Clock className="h-5 w-5" aria-hidden="true" />
+              )}
+            </div>
+            <h2 className="mt-4 text-base font-semibold text-slate-900 dark:text-white">
+              {activeTab === 'Favorites' && !searchQuery
+                ? 'No pinned countries yet'
+                : 'No matching countries found'}
+            </h2>
+            <p className="mt-1.5 max-w-sm text-sm text-slate-500 dark:text-slate-400">
+              {activeTab === 'Favorites' && !searchQuery
+                ? 'Click the star icon on any country card to pin your go-to timezones to the top of the screen.'
+                : `No country, capital, currency, or timezone matched "${searchQuery}".`}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setSearchQuery('');
+                setActiveTab('All');
+              }}
+              className="mt-5 rounded-xl bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-slate-800 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400"
+            >
+              {activeTab === 'Favorites' && !searchQuery
+                ? `Browse All ${COUNTRIES.length} Countries`
+                : 'Reset Filters'}
+            </button>
+          </section>
+        ) : (
+          <div className="space-y-10">
+            {/* Pinned Favorites Section */}
+            {pinnedVisible.length > 0 && (
+              <section aria-labelledby="pinned-heading">
+                <div className="mb-4 flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-2">
+                    <Star
+                      className="h-4 w-4 text-amber-500 dark:text-amber-400"
+                      fill="currentColor"
+                      aria-hidden="true"
+                    />
+                    <h2
+                      id="pinned-heading"
+                      className="text-sm font-semibold tracking-tight text-slate-800 dark:text-slate-200"
+                    >
+                      Pinned Favorites
+                    </h2>
+                    <span className="tabular-clock text-xs text-slate-400 dark:text-slate-500">
+                      · {pinnedVisible.length}
+                    </span>
+                  </div>
+                  <span className="hidden text-xs text-slate-400 sm:inline dark:text-slate-500">
+                    Click any card for quick info &amp; currency converter
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                  {pinnedVisible.map((country) => (
+                    <ClockCard
+                      key={country.iso}
+                      country={country}
+                      displayDate={displayDate}
+                      is24Hour={is24Hour}
+                      clockView={clockView}
+                      tempUnit={tempUnit}
+                      isPinned={true}
+                      isFocusedOnGlobe={focusedIso === country.iso}
+                      isCompareMode={compareConfig.active}
+                      referenceDateKey={referenceClock.dateKey}
+                      isCopied={copiedIso === country.iso}
+                      weather={weatherMap[country.iso]}
+                      rates={fxState.rates}
+                      onTogglePin={handleTogglePin}
+                      onCopy={handleCopyCard}
+                      onFocusGlobe={(c) => handleFocusGlobe(c, true)}
+                      onOpenDetails={handleOpenDetails}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* Main Country Clocks Grid */}
+            {regularVisible.length > 0 && (
+              <section
+                aria-labelledby="world-clocks-heading"
+                className={
+                  pinnedVisible.length > 0
+                    ? 'border-t border-slate-200/80 pt-8 dark:border-white/[0.08]'
+                    : ''
+                }
+              >
+                <div className="mb-4 flex items-center justify-between gap-4">
+                  <h2
+                    id="world-clocks-heading"
+                    className="text-sm font-semibold tracking-tight text-slate-800 dark:text-slate-200"
+                  >
+                    {activeTab === 'All'
+                      ? pinnedVisible.length > 0
+                        ? 'All Other Countries'
+                        : 'All Countries'
+                      : activeTab === 'Favorites'
+                        ? 'Pinned Favorites'
+                        : activeTab}
+                    <span className="tabular-clock ml-1.5 font-normal text-slate-400 dark:text-slate-500">
+                      · {regularVisible.length}
+                    </span>
+                  </h2>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                  {regularVisible.map((country) => (
+                    <ClockCard
+                      key={country.iso}
+                      country={country}
+                      displayDate={displayDate}
+                      is24Hour={is24Hour}
+                      clockView={clockView}
+                      tempUnit={tempUnit}
+                      isPinned={pinnedSet.has(country.iso)}
+                      isFocusedOnGlobe={focusedIso === country.iso}
+                      isCompareMode={compareConfig.active}
+                      referenceDateKey={referenceClock.dateKey}
+                      isCopied={copiedIso === country.iso}
+                      weather={weatherMap[country.iso]}
+                      rates={fxState.rates}
+                      onTogglePin={handleTogglePin}
+                      onCopy={handleCopyCard}
+                      onFocusGlobe={(c) => handleFocusGlobe(c, true)}
+                      onOpenDetails={handleOpenDetails}
+                    />
+                  ))}
+                </div>
+              </section>
+            )}
+          </div>
+        )}
+      </main>
+
+      {/* Quiet Footer */}
+      <footer className="relative z-10 border-t border-slate-200/70 py-8 dark:border-white/[0.06]">
+        <div className="mx-auto flex max-w-[1380px] flex-col items-center justify-between gap-2 px-4 text-xs text-slate-500 sm:flex-row sm:px-6 lg:px-8 dark:text-slate-500">
+          <p>Meridian Global Intelligence · Native IANA timezones, Open-Meteo weather &amp; LKR/USD rates</p>
+          <p className="tabular-clock">{COUNTRIES.length} countries indexed</p>
+        </div>
+      </footer>
+
+      {/* Compare Time Modal */}
+      <CompareModal
+        isOpen={compareModalOpen}
+        onClose={() => setCompareModalOpen(false)}
+        countries={COUNTRIES}
+        pinnedCountries={pinnedCountriesOrdered}
+        is24Hour={is24Hour}
+        currentConfig={compareConfig}
+        onApply={(cfg) => {
+          setCompareConfig(cfg);
+          showToast('Comparison active', `Showing global times for ${cfg.refLabel}`);
+        }}
+        onResetLive={handleResetLive}
+      />
+
+      {/* Country Quick Info Modal */}
+      <CountryModal
+        country={inspectedCountry}
+        displayDate={displayDate}
+        is24Hour={is24Hour}
+        tempUnit={tempUnit}
+        isPinned={inspectedCountry ? pinnedSet.has(inspectedCountry.iso) : false}
+        weather={inspectedCountry ? weatherMap[inspectedCountry.iso] : undefined}
+        rates={fxState.rates}
+        ratesAreLive={fxState.isLive}
+        onClose={() => setInspectedCountry(null)}
+        onTogglePin={handleTogglePin}
+        onFocusOnGlobe={(c) => handleFocusGlobe(c, true)}
+        onCopySummary={handleCopyCard}
+      />
+
+      {/* Multi-Stop Route, Layover & Jet Lag Calculator Modal */}
+      <RouteJetLagModal
+        isOpen={routeModalOpen}
+        onClose={() => setRouteModalOpen(false)}
+        countries={COUNTRIES}
+        is24Hour={is24Hour}
+      />
+
+      {/* World Alarms & Hourly Chime Modal */}
+      <AlarmModal
+        isOpen={alarmModalOpen}
+        onClose={() => setAlarmModalOpen(false)}
+        countries={COUNTRIES}
+        now={now}
+        is24Hour={is24Hour}
+        alarms={alarms}
+        hourlyChimeEnabled={hourlyChimeEnabled}
+        onAddAlarm={handleAddAlarm}
+        onToggleAlarm={handleToggleAlarm}
+        onDeleteAlarm={handleDeleteAlarm}
+        onToggleHourlyChime={setHourlyChimeEnabled}
+      />
+
+      {/* Active Ringing World Alarm Alert */}
+      {ringingAlarm && (
+        <div
+          role="alertdialog"
+          aria-live="assertive"
+          aria-labelledby="ringing-alarm-title"
+          className="fixed top-20 right-5 z-50 w-[min(360px,calc(100vw-2.5rem))] overflow-hidden rounded-2xl border border-amber-300/90 bg-white/95 p-4 shadow-2xl backdrop-blur-2xl dark:border-amber-400/40 dark:bg-slate-900/95"
+        >
+          <div className="flex items-start gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-300">
+              <Bell className="h-5 w-5" aria-hidden="true" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <p
+                id="ringing-alarm-title"
+                className="truncate text-sm font-bold text-slate-950 dark:text-white"
+              >
+                {ringingAlarm.alarm.label}
+              </p>
+              <div className="mt-1 flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                <img
+                  src={`https://flagcdn.com/w40/${ringingAlarm.country.iso}.png`}
+                  alt=""
+                  width={18}
+                  height={12}
+                  referrerPolicy="no-referrer"
+                  className="h-3 w-4.5 rounded-[2px] object-cover"
+                />
+                <span className="truncate">{ringingAlarm.country.name}</span>
+                <span aria-hidden="true">·</span>
+                <span className="tabular-clock font-semibold text-sky-600 dark:text-sky-400">
+                  {ringingAlarm.firedTimeLabel}
+                </span>
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSnoozeAlarm}
+                  className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-100 dark:border-white/12 dark:text-slate-200 dark:hover:bg-white/[0.08]"
+                >
+                  Snooze 5m
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRingingAlarm(null)}
+                  className="rounded-lg bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 dark:bg-amber-400 dark:text-slate-950 dark:hover:bg-amber-300"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sleek Floating Toast Notification */}
+      {toast && (
+        <div
+          key={toast.id}
+          role="status"
+          aria-live="polite"
+          className="fixed right-5 bottom-5 z-50 flex items-center gap-2.5 rounded-xl border border-slate-200/90 bg-white/95 px-4 py-3 text-sm shadow-xl backdrop-blur-xl dark:border-white/15 dark:bg-slate-900/95"
+        >
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+            <Check className="h-3.5 w-3.5" aria-hidden="true" />
+          </span>
+          <div className="leading-tight">
+            <p className="font-semibold text-slate-900 dark:text-white">{toast.title}</p>
+            {toast.detail && (
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{toast.detail}</p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
