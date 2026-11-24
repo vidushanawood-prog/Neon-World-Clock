@@ -3,16 +3,25 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import {
+  Cable,
   ChevronDown,
   ChevronUp,
   Compass,
   Expand,
   Info,
+  Orbit,
   RotateCcw,
   Satellite,
+  Wifi,
 } from 'lucide-react';
 import type { Country } from '../data/countries';
+import { getCountryConnectivity, SUBMARINE_CABLES } from '../data/connectivity';
 import type { IssPosition } from '../services/iss';
+import {
+  buildSatelliteOrbitRing,
+  propagateSatellites,
+  type LiveSatellite,
+} from '../services/satellites';
 import { formatClockForZone } from '../utils/time';
 import {
   formatLkrRateShort,
@@ -25,6 +34,7 @@ interface EarthGlobeProps {
   countries: readonly Country[];
   focusedCountry: Country;
   issPosition: IssPosition;
+  satellites: readonly LiveSatellite[];
   pinnedSet: Set<string>;
   displayDate: Date;
   is24Hour: boolean;
@@ -68,6 +78,39 @@ function latLngToVec3(lat: number, lng: number, radius: number, out: THREE.Vecto
     radius * Math.sin(phi) * Math.sin(theta)
   );
   return out;
+}
+
+/**
+ * Builds a smooth elevated great-circle fiber arc connecting consecutive submarine cable waypoints.
+ */
+function buildSubmarineCablePoints(
+  waypoints: ReadonlyArray<readonly [number, number]>,
+  baseRadius = 1.011
+): THREE.Vector3[] {
+  const points: THREE.Vector3[] = [];
+  const pA = new THREE.Vector3();
+  const pB = new THREE.Vector3();
+  const interp = new THREE.Vector3();
+
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const [latA, lngA] = waypoints[i];
+    const [latB, lngB] = waypoints[i + 1];
+    latLngToVec3(latA, lngA, 1, pA);
+    latLngToVec3(latB, lngB, 1, pB);
+
+    const angle = pA.angleTo(pB);
+    const steps = Math.max(8, Math.round(angle * 22));
+    const liftMax = Math.min(0.052, 0.012 + angle * 0.032);
+
+    for (let s = 0; s <= steps; s++) {
+      if (i > 0 && s === 0) continue;
+      const t = s / steps;
+      interp.copy(pA).lerp(pB, t).normalize();
+      const arch = Math.sin(t * Math.PI) * liftMax;
+      points.push(interp.clone().multiplyScalar(baseRadius + arch));
+    }
+  }
+  return points;
 }
 
 // Simplified landmass polygons used strictly for instant pre-CDN fallback & 2D WebGL fallback
@@ -189,9 +232,7 @@ function createRoughnessFromWaterMask(image: HTMLImageElement, maxAnisotropy: nu
     const imgData = ctx.getImageData(0, 0, w, h);
     const data = imgData.data;
     for (let i = 0; i < data.length; i += 4) {
-      // Water mask is bright (255) on ocean, dark (0) on land
       const isWater = data[i] / 255;
-      // Map ocean -> 78 (~0.31 roughness), land -> 224 (~0.88 roughness)
       const rough = Math.round(224 - isWater * 146);
       data[i] = rough;
       data[i + 1] = rough;
@@ -200,7 +241,6 @@ function createRoughnessFromWaterMask(image: HTMLImageElement, maxAnisotropy: nu
     }
     ctx.putImageData(imgData, 0, 0);
   } catch {
-    // Keep neutral matte fallback if canvas pixel read is tainted
     ctx.fillStyle = '#c8c8c8';
     ctx.fillRect(0, 0, w, h);
   }
@@ -232,6 +272,7 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
   countries,
   focusedCountry,
   issPosition,
+  satellites,
   pinnedSet,
   displayDate,
   is24Hour,
@@ -245,12 +286,19 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const [webglUnavailable, setWebglUnavailable] = useState(false);
-  const [trackingIss, setTrackingIss] = useState(false);
+
+  // Toggleable Global Connectivity & Orbital Satellite layers
+  const [showCablesLayer, setShowCablesLayer] = useState(true);
+  const [showSatellitesLayer, setShowSatellitesLayer] = useState(true);
+  const [trackedSatId, setTrackedSatId] = useState<string | null>(null);
 
   // Refs synced from React props without tearing down WebGL context
   const focusedRef = useRef<Country>(focusedCountry);
   const issRef = useRef<IssPosition>(issPosition);
-  const trackingIssRef = useRef<boolean>(false);
+  const satellitesRef = useRef<readonly LiveSatellite[]>(satellites);
+  const trackedSatIdRef = useRef<string | null>(null);
+  const showCablesRef = useRef<boolean>(showCablesLayer);
+  const showSatellitesRef = useRef<boolean>(showSatellitesLayer);
   const pinnedRef = useRef<Set<string>>(pinnedSet);
   const countriesRef = useRef<readonly Country[]>(countries);
   const onSelectRef = useRef(onSelectCountry);
@@ -258,28 +306,56 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
   const resetViewRef = useRef<(() => void) | null>(null);
   const updateMarkersRef = useRef<(() => void) | null>(null);
   const updateIssMeshRef = useRef<(() => void) | null>(null);
+  const updateCablesVisualRef = useRef<(() => void) | null>(null);
+  const updateSatellitesVisualRef = useRef<(() => void) | null>(null);
   const pauseAutoRotateRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     focusedRef.current = focusedCountry;
-    trackingIssRef.current = false;
-    setTrackingIss(false);
+    trackedSatIdRef.current = null;
+    setTrackedSatId(null);
     needsFocusGlideRef.current = true;
     pauseAutoRotateRef.current?.();
     updateMarkersRef.current?.();
+    updateCablesVisualRef.current?.();
   }, [focusedCountry]);
 
   useEffect(() => {
     issRef.current = issPosition;
     updateIssMeshRef.current?.();
-    if (trackingIssRef.current) {
+    if (trackedSatIdRef.current === 'iss') {
       needsFocusGlideRef.current = true;
     }
   }, [issPosition]);
 
-  const handleTrackIss = () => {
-    trackingIssRef.current = true;
-    setTrackingIss(true);
+  useEffect(() => {
+    satellitesRef.current = satellites;
+    updateSatellitesVisualRef.current?.();
+    if (trackedSatIdRef.current) {
+      needsFocusGlideRef.current = true;
+    }
+  }, [satellites]);
+
+  useEffect(() => {
+    showCablesRef.current = showCablesLayer;
+    updateCablesVisualRef.current?.();
+  }, [showCablesLayer]);
+
+  useEffect(() => {
+    showSatellitesRef.current = showSatellitesLayer;
+    updateSatellitesVisualRef.current?.();
+    if (!showSatellitesLayer && trackedSatIdRef.current && trackedSatIdRef.current !== 'iss') {
+      trackedSatIdRef.current = null;
+      setTrackedSatId(null);
+    }
+  }, [showSatellitesLayer]);
+
+  const handleTrackSatellite = (satId: string) => {
+    if (satId !== 'iss' && !showSatellitesLayer) {
+      setShowSatellitesLayer(true);
+    }
+    trackedSatIdRef.current = satId;
+    setTrackedSatId(satId);
     needsFocusGlideRef.current = true;
     pauseAutoRotateRef.current?.();
   };
@@ -297,7 +373,7 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
     onSelectRef.current = onSelectCountry;
   }, [onSelectCountry]);
 
-  // Live telemetry for focused country HUD
+  // Live telemetry for focused country HUD & connectivity
   const focusedClock = useMemo(
     () => formatClockForZone(displayDate, focusedCountry.timezone, is24Hour),
     [displayDate, focusedCountry.timezone, is24Hour]
@@ -306,6 +382,14 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
   const focusedLkrRate = useMemo(
     () => formatLkrRateShort(focusedCountry.currency, rates),
     [focusedCountry.currency, rates]
+  );
+  const focusedConnectivity = useMemo(
+    () => getCountryConnectivity(focusedCountry),
+    [focusedCountry]
+  );
+  const activeTrackedSat = useMemo(
+    () => satellites.find((s) => s.id === trackedSatId) || null,
+    [satellites, trackedSatId]
   );
 
   // Mount Photorealistic Three.js Globe when expanded
@@ -328,7 +412,7 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
     const height = container.clientHeight || 380;
 
     const camera = new THREE.PerspectiveCamera(40, width / height, 0.1, 100);
-    latLngToVec3(focusedRef.current.lat, focusedRef.current.lng, 2.8, camera.position);
+    latLngToVec3(focusedRef.current.lat, focusedRef.current.lng, 2.85, camera.position);
     camera.lookAt(0, 0, 0);
 
     let renderer: THREE.WebGLRenderer;
@@ -349,7 +433,6 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
     renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2));
     renderer.setSize(width, height);
     renderer.setClearColor(0x000000, 0);
-    // Crucial for mobile touchscreens: prevent page scroll while hand-rotating or pinch-zooming globe
     renderer.domElement.style.touchAction = 'none';
     renderer.domElement.style.display = 'block';
     renderer.domElement.style.width = '100%';
@@ -358,7 +441,6 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
 
-    // WebGL context loss safety
     const handleContextLost = (e: Event) => {
       e.preventDefault();
       setWebglUnavailable(true);
@@ -381,7 +463,6 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
     const solarLng = (12 - utcHours) * 15;
     const sunDirection = latLngToVec3(12, solarLng, 1, new THREE.Vector3()).normalize();
 
-    // Realistic orbital lighting rig (Sun Key + Cool Space Hemisphere + Soft Cyan Rim)
     const hemiLight = new THREE.HemisphereLight(0xbfe0ff, 0x0b162c, 0.85);
     scene.add(hemiLight);
 
@@ -393,7 +474,6 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
     rimLight.position.copy(sunDirection).multiplyScalar(-5).add(new THREE.Vector3(0, 2.5, 0));
     scene.add(rimLight);
 
-    // Composite Photorealistic Globe Group
     const globeGroup = new THREE.Group();
     scene.add(globeGroup);
 
@@ -404,7 +484,7 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
     // Part 1: High-Definition Satellite Earth Sphere with dynamic Day/Night city-light shader blending
     const earthGeo = new THREE.SphereGeometry(1, 72, 54);
     const sunDirUniform = { value: sunDirection.clone() };
-    const nightLightsMixUniform = { value: 0.0 }; // ramps to 1.0 once night texture loads
+    const nightLightsMixUniform = { value: 0.0 };
 
     const earthMat = new THREE.MeshStandardMaterial({
       map: fallbackAlbedo,
@@ -455,77 +535,61 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
     const textureLoader = new THREE.TextureLoader();
     textureLoader.setCrossOrigin('anonymous');
 
-    textureLoader.load(
-      EARTH_TEXTURE_URLS.day,
-      (tex) => {
-        if (disposed) {
-          tex.dispose();
-          return;
-        }
-        tex.colorSpace = THREE.SRGBColorSpace;
-        tex.anisotropy = Math.min(8, maxAniso);
-        loadedTextures.push(tex);
-        earthMat.map = tex;
-        earthMat.needsUpdate = true;
-      },
-      undefined,
-      () => {
-        // Keep clean fallback texture gracefully if CDN is blocked
+    textureLoader.load(EARTH_TEXTURE_URLS.day, (tex) => {
+      if (disposed) {
+        tex.dispose();
+        return;
       }
-    );
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = Math.min(8, maxAniso);
+      loadedTextures.push(tex);
+      earthMat.map = tex;
+      earthMat.needsUpdate = true;
+    });
 
-    textureLoader.load(
-      EARTH_TEXTURE_URLS.bump,
-      (tex) => {
-        if (disposed) {
-          tex.dispose();
-          return;
-        }
-        tex.colorSpace = THREE.NoColorSpace;
-        tex.anisotropy = Math.min(4, maxAniso);
-        loadedTextures.push(tex);
-        earthMat.bumpMap = tex;
-        earthMat.bumpScale = 0.032;
-        earthMat.needsUpdate = true;
+    textureLoader.load(EARTH_TEXTURE_URLS.bump, (tex) => {
+      if (disposed) {
+        tex.dispose();
+        return;
       }
-    );
+      tex.colorSpace = THREE.NoColorSpace;
+      tex.anisotropy = Math.min(4, maxAniso);
+      loadedTextures.push(tex);
+      earthMat.bumpMap = tex;
+      earthMat.bumpScale = 0.032;
+      earthMat.needsUpdate = true;
+    });
 
-    textureLoader.load(
-      EARTH_TEXTURE_URLS.water,
-      (waterTex) => {
-        if (disposed) {
-          waterTex.dispose();
-          return;
-        }
-        const img = waterTex.image as HTMLImageElement | undefined;
+    textureLoader.load(EARTH_TEXTURE_URLS.water, (waterTex) => {
+      if (disposed) {
         waterTex.dispose();
-        if (img) {
-          const roughTex = createRoughnessFromWaterMask(img, maxAniso);
-          loadedTextures.push(roughTex);
-          earthMat.roughnessMap = roughTex;
-          earthMat.roughness = 0.92;
-          earthMat.needsUpdate = true;
-        }
+        return;
       }
-    );
-
-    textureLoader.load(
-      EARTH_TEXTURE_URLS.night,
-      (tex) => {
-        if (disposed) {
-          tex.dispose();
-          return;
-        }
-        tex.colorSpace = THREE.SRGBColorSpace;
-        tex.anisotropy = Math.min(8, maxAniso);
-        loadedTextures.push(tex);
-        earthMat.emissiveMap = tex;
-        nightLightsMixUniform.value = 1.0;
+      const img = waterTex.image as HTMLImageElement | undefined;
+      waterTex.dispose();
+      if (img) {
+        const roughTex = createRoughnessFromWaterMask(img, maxAniso);
+        loadedTextures.push(roughTex);
+        earthMat.roughnessMap = roughTex;
+        earthMat.roughness = 0.92;
         earthMat.needsUpdate = true;
       }
-    );
+    });
 
-    // Part 2: Outer Atmospheric Fresnel Halo (soft blue/cyan orbital scattering)
+    textureLoader.load(EARTH_TEXTURE_URLS.night, (tex) => {
+      if (disposed) {
+        tex.dispose();
+        return;
+      }
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = Math.min(8, maxAniso);
+      loadedTextures.push(tex);
+      earthMat.emissiveMap = tex;
+      nightLightsMixUniform.value = 1.0;
+      earthMat.needsUpdate = true;
+    });
+
+    // Part 2 & 3: Dual-Layer Atmospheric Fresnel Halo
     const atmosOuterGeo = new THREE.SphereGeometry(1.07, 56, 40);
     const atmosOuterMat = new THREE.ShaderMaterial({
       vertexShader: `
@@ -550,7 +614,6 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
     const atmosOuterMesh = new THREE.Mesh(atmosOuterGeo, atmosOuterMat);
     globeGroup.add(atmosOuterMesh);
 
-    // Part 3: Inner Atmospheric Limb Scatter (subtle blue rim hugging horizon)
     const atmosInnerGeo = new THREE.SphereGeometry(1.008, 56, 40);
     const atmosInnerMat = new THREE.ShaderMaterial({
       vertexShader: `
@@ -575,7 +638,77 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
     const atmosInnerMesh = new THREE.Mesh(atmosInnerGeo, atmosInnerMat);
     globeGroup.add(atmosInnerMesh);
 
-    // Part 4: InstancedMesh of all capital markers cleanly floating just above the Earth surface
+    // Part 4: Toggleable Submarine Fiber-Optic Cable Network Layer (Glowing Neon Cyan & Amber Arcs)
+    const cablesGroup = new THREE.Group();
+    const cableDisposables: Array<THREE.BufferGeometry | THREE.Material> = [];
+    const cableVisualItems: Array<{
+      id: string;
+      connectedIsos: readonly string[];
+      baseColor: number;
+      lineMat: THREE.LineBasicMaterial;
+      glowMesh: THREE.Mesh;
+      glowMat: THREE.MeshBasicMaterial;
+    }> = [];
+
+    for (const cable of SUBMARINE_CABLES) {
+      const pts = buildSubmarineCablePoints(cable.waypoints, 1.011);
+      const baseColor = cable.color === 'cyan' ? 0x22d3ee : 0xfbbf24;
+
+      const lineGeo = new THREE.BufferGeometry().setFromPoints(pts);
+      const lineMat = new THREE.LineBasicMaterial({
+        color: baseColor,
+        transparent: true,
+        opacity: 0.45,
+        depthWrite: false,
+      });
+      const line = new THREE.Line(lineGeo, lineMat);
+
+      // Luminous tube highlight mesh (shown brightly when connected to the selected country)
+      const curve = new THREE.CatmullRomCurve3(pts);
+      const tubeGeo = new THREE.TubeGeometry(curve, Math.min(84, pts.length * 2), 0.0046, 6, false);
+      const glowMat = new THREE.MeshBasicMaterial({
+        color: baseColor,
+        transparent: true,
+        opacity: 0.95,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      });
+      const glowMesh = new THREE.Mesh(tubeGeo, glowMat);
+      glowMesh.visible = false;
+
+      cablesGroup.add(line, glowMesh);
+      cableDisposables.push(lineGeo, lineMat, tubeGeo, glowMat);
+      cableVisualItems.push({
+        id: cable.id,
+        connectedIsos: cable.connectedIsos,
+        baseColor,
+        lineMat,
+        glowMesh,
+        glowMat,
+      });
+    }
+    globeGroup.add(cablesGroup);
+
+    const syncCablesVisual = () => {
+      cablesGroup.visible = showCablesRef.current;
+      if (!showCablesRef.current) return;
+
+      const conn = getCountryConnectivity(focusedRef.current);
+      const activeIds = new Set(
+        (conn.directCables.length > 0 ? conn.directCables : conn.transitCables).map((c) => c.id)
+      );
+
+      for (const item of cableVisualItems) {
+        const isHighlighted = activeIds.has(item.id);
+        item.lineMat.opacity = isHighlighted ? 0.95 : 0.24;
+        item.glowMesh.visible = isHighlighted;
+        item.glowMat.opacity = isHighlighted ? 0.85 : 0.0;
+      }
+    };
+    syncCablesVisual();
+    updateCablesVisualRef.current = syncCablesVisual;
+
+    // Part 5: InstancedMesh of all capital markers cleanly floating just above the Earth surface
     const pinGeo = new THREE.SphereGeometry(0.013, 10, 10);
     const pinMat = new THREE.MeshStandardMaterial({
       color: 0xffffff,
@@ -588,7 +721,7 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
     pinsMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     globeGroup.add(pinsMesh);
 
-    // Part 5: Selected country 3D beacon (needle + luminous tip + surface ring)
+    // Part 6: Selected country 3D beacon (needle + luminous tip + surface ring)
     const beaconGroup = new THREE.Group();
     const needleGeo = new THREE.CylinderGeometry(0.0038, 0.0075, 0.135, 10);
     needleGeo.translate(0, 0.0675, 0);
@@ -627,7 +760,7 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
     beaconGroup.add(needleMesh, tipMesh, haloMesh);
     globeGroup.add(beaconGroup);
 
-    // Part 6: Live ISS Orbital Station (composite 3-part assembly + nadir ground line)
+    // Part 7: Live ISS Orbital Station (composite 3-part assembly + nadir ground line)
     const issGroup = new THREE.Group();
     const issCoreGeo = new THREE.CylinderGeometry(0.009, 0.009, 0.048, 10);
     issCoreGeo.rotateZ(Math.PI / 2);
@@ -691,11 +824,99 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
       posAttr.setXYZ(1, _vec3B.x, _vec3B.y, _vec3B.z);
       posAttr.needsUpdate = true;
     };
-
     syncIssMesh();
     updateIssMeshRef.current = syncIssMesh;
 
-    // Part 7: Deep Space Starfield
+    // Part 8: Toggleable Multi-Satellite Live Orbital Layer (LEO, SSO-LEO, MEO, GEO + Orbital Paths)
+    const satellitesGroup = new THREE.Group();
+    const satDisposables: Array<THREE.BufferGeometry | THREE.Material> = [];
+    const satBodyGeo = new THREE.OctahedronGeometry(0.017, 0);
+    const satWingGeo = new THREE.BoxGeometry(0.052, 0.0025, 0.014);
+    satDisposables.push(satBodyGeo, satWingGeo);
+
+    const satVisualMap = new Map<
+      string,
+      {
+        nodeGroup: THREE.Group;
+        orbitLine: THREE.Line;
+        orbitMat: THREE.LineBasicMaterial;
+      }
+    >();
+
+    const initialNowMs = Date.now();
+    for (const sat of satellitesRef.current) {
+      // Build subtle 3D orbital path ring for every tracked satellite (including ISS orbit path)
+      const ringLatLng = buildSatelliteOrbitRing(sat, initialNowMs, 72);
+      const ringVecs = ringLatLng.map(([lat, lng]) =>
+        latLngToVec3(lat, lng, sat.globeRadius, new THREE.Vector3())
+      );
+      const orbitGeo = new THREE.BufferGeometry().setFromPoints(ringVecs);
+      const orbitMat = new THREE.LineBasicMaterial({
+        color: sat.colorInt,
+        transparent: true,
+        opacity: sat.id === 'iss' ? 0.42 : 0.25,
+        depthWrite: false,
+      });
+      const orbitLine = new THREE.Line(orbitGeo, orbitMat);
+      satellitesGroup.add(orbitLine);
+      satDisposables.push(orbitGeo, orbitMat);
+
+      // Composite miniature satellite node (ISS already has its detailed station above)
+      const nodeGroup = new THREE.Group();
+      if (sat.id !== 'iss') {
+        const bodyMat = new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          emissive: sat.colorInt,
+          emissiveIntensity: 1.05,
+          roughness: 0.25,
+          metalness: 0.7,
+        });
+        const wingMat = new THREE.MeshStandardMaterial({
+          color: sat.colorInt,
+          emissive: sat.colorInt,
+          emissiveIntensity: 0.45,
+          roughness: 0.3,
+          metalness: 0.65,
+        });
+        satDisposables.push(bodyMat, wingMat);
+
+        const bodyMesh = new THREE.Mesh(satBodyGeo, bodyMat);
+        const wingMesh = new THREE.Mesh(satWingGeo, wingMat);
+        nodeGroup.add(bodyMesh, wingMesh);
+        satellitesGroup.add(nodeGroup);
+      }
+
+      satVisualMap.set(sat.id, { nodeGroup, orbitLine, orbitMat });
+    }
+    globeGroup.add(satellitesGroup);
+
+    const syncSatellitesVisual = (liveList?: readonly LiveSatellite[]) => {
+      satellitesGroup.visible = showSatellitesRef.current;
+      if (!showSatellitesRef.current) return;
+
+      const list = liveList || satellitesRef.current;
+      const activeTracked = trackedSatIdRef.current;
+
+      for (const sat of list) {
+        const entry = satVisualMap.get(sat.id);
+        if (!entry) continue;
+        const isSelected = activeTracked === sat.id;
+        entry.orbitMat.opacity = isSelected ? 0.85 : sat.id === 'iss' ? 0.42 : 0.24;
+
+        if (sat.id !== 'iss') {
+          latLngToVec3(sat.latitude, sat.longitude, sat.globeRadius, _vec3);
+          entry.nodeGroup.position.copy(_vec3);
+          _normal.copy(_vec3).normalize();
+          _quat.setFromUnitVectors(_up, _normal);
+          entry.nodeGroup.quaternion.copy(_quat);
+          entry.nodeGroup.scale.setScalar(isSelected ? 1.55 : 1.0);
+        }
+      }
+    };
+    syncSatellitesVisual();
+    updateSatellitesVisualRef.current = () => syncSatellitesVisual();
+
+    // Part 9: Deep Space Starfield
     const starCount = 520;
     const starPositions = new Float32Array(starCount * 3);
     for (let i = 0; i < starCount; i++) {
@@ -747,14 +968,12 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
       if (pinsMesh.instanceColor) pinsMesh.instanceColor.needsUpdate = true;
       pinsMesh.computeBoundingSphere();
 
-      // Orient active beacon along surface normal of focused country
       latLngToVec3(focusedRef.current.lat, focusedRef.current.lng, 1.008, _vec3);
       beaconGroup.position.copy(_vec3);
       _normal.copy(_vec3).normalize();
       _quat.setFromUnitVectors(_up, _normal);
       beaconGroup.quaternion.copy(_quat);
     };
-
     syncMarkers();
     updateMarkersRef.current = syncMarkers;
 
@@ -772,7 +991,6 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
     controls.autoRotate = !isSoftwareGl;
     controls.autoRotateSpeed = 0.35;
 
-    // Pause auto-rotation immediately on manual drag/touch or country focus
     controls.addEventListener('start', () => {
       needsFocusGlideRef.current = false;
       controls.autoRotate = false;
@@ -801,7 +1019,7 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
     const handlePointerUp = (e: PointerEvent) => {
       const dx = e.clientX - pointerDownX;
       const dy = e.clientY - pointerDownY;
-      if (dx * dx + dy * dy > 25) return; // Ignore drag gestures
+      if (dx * dx + dy * dy > 25) return;
 
       const rect = renderer.domElement.getBoundingClientRect();
       pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
@@ -820,7 +1038,6 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
     renderer.domElement.addEventListener('pointerdown', handlePointerDown);
     renderer.domElement.addEventListener('pointerup', handlePointerUp);
 
-    // Responsive ResizeObserver
     const ro = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (!entry) return;
@@ -836,7 +1053,6 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
       renderer.compile(scene, camera);
     }
 
-    // Software WebGL fence-based pacing (per threejs skill)
     const afterDraw = (cb: () => void) => {
       const gl = renderer.getContext() as WebGL2RenderingContext;
       if (typeof gl.fenceSync === 'function') {
@@ -862,20 +1078,37 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
     };
 
     const clock = new THREE.Clock();
+    let satPropagateAccum = 0;
 
     const tick = () => {
       if (disposed) return;
       const dt = Math.min(clock.getDelta(), 0.05);
 
-      // Smooth exponential glide toward focused country OR live ISS coordinates
+      // Keep satellites smoothly advancing along their orbital paths every ~250ms
+      satPropagateAccum += dt;
+      if (showSatellitesRef.current && satPropagateAccum >= 0.25) {
+        satPropagateAccum = 0;
+        const freshSats = propagateSatellites(Date.now(), issRef.current);
+        syncSatellitesVisual(freshSats);
+      }
+
+      // Smooth exponential glide toward focused country OR selected tracked satellite
       if (needsFocusGlideRef.current) {
-        const dist = THREE.MathUtils.clamp(camera.position.length(), 2.3, 3.0);
-        const targetLat = trackingIssRef.current
-          ? issRef.current.latitude
-          : focusedRef.current.lat;
-        const targetLng = trackingIssRef.current
-          ? issRef.current.longitude
-          : focusedRef.current.lng;
+        const dist = THREE.MathUtils.clamp(camera.position.length(), 2.35, 3.15);
+        let targetLat = focusedRef.current.lat;
+        let targetLng = focusedRef.current.lng;
+
+        if (trackedSatIdRef.current) {
+          const sat = satellitesRef.current.find((s) => s.id === trackedSatIdRef.current);
+          if (sat) {
+            targetLat = sat.latitude;
+            targetLng = sat.longitude;
+          } else {
+            targetLat = issRef.current.latitude;
+            targetLng = issRef.current.longitude;
+          }
+        }
+
         latLngToVec3(targetLat, targetLng, dist, _targetCamPos);
 
         if (isSoftwareGl) {
@@ -923,6 +1156,8 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
       atmosOuterMat.dispose();
       atmosInnerGeo.dispose();
       atmosInnerMat.dispose();
+      cableDisposables.forEach((d) => d.dispose());
+      satDisposables.forEach((d) => d.dispose());
       pinGeo.dispose();
       pinMat.dispose();
       needleGeo.dispose();
@@ -945,6 +1180,8 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
       renderer.dispose();
       updateMarkersRef.current = null;
       updateIssMeshRef.current = null;
+      updateCablesVisualRef.current = null;
+      updateSatellitesVisualRef.current = null;
       resetViewRef.current = null;
       pauseAutoRotateRef.current = null;
     };
@@ -964,7 +1201,6 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
         ? 'bg-amber-400'
         : 'bg-rose-400';
 
-  // Collapsed sleek bar
   if (collapsed) {
     return (
       <section
@@ -1001,11 +1237,15 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
     );
   }
 
-  // Fallback 2D coordinate projection coordinates for focused country & ISS
   const fallbackX = ((focusedCountry.lng + 180) / 360) * 100;
   const fallbackY = ((90 - focusedCountry.lat) / 180) * 100;
   const issFallbackX = ((issPosition.longitude + 180) / 360) * 100;
   const issFallbackY = ((90 - issPosition.latitude) / 180) * 100;
+
+  const activeCablesList =
+    focusedConnectivity.directCables.length > 0
+      ? focusedConnectivity.directCables
+      : focusedConnectivity.transitCables;
 
   return (
     <section
@@ -1018,62 +1258,97 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_50%_45%,rgba(14,165,233,0.14),rgba(4,9,20,0.98)_70%)]"
       />
 
-      {/* Top Overlay Header (No backdrop-filter over WebGL; solid rgba surfaces) */}
-      <div className="pointer-events-none relative z-10 flex flex-wrap items-center justify-between gap-2 px-5 pt-4">
+      {/* Top Overlay Header (Solid rgba surfaces, zero backdrop-filter over WebGL) */}
+      <div className="pointer-events-none relative z-10 flex flex-wrap items-center justify-between gap-2 px-4 pt-4 sm:px-5">
         <div className="pointer-events-auto flex flex-wrap items-center gap-x-2.5 gap-y-1 rounded-xl border border-white/10 bg-[#081226]/92 px-3 py-1.5 text-xs text-slate-300">
           <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-300">
             <Satellite className="h-3.5 w-3.5" aria-hidden="true" />
-            <span>{issPosition.isLive ? 'ISS Live' : 'ISS Orbit'}</span>
+            <span>
+              {activeTrackedSat
+                ? activeTrackedSat.shortName
+                : issPosition.isLive
+                  ? 'ISS Live'
+                  : 'ISS Orbit'}
+            </span>
           </span>
           <span aria-hidden="true" className="text-slate-600">
             ·
           </span>
           <span className="tabular-clock text-slate-200">
-            {Math.abs(issPosition.latitude).toFixed(2)}°{issPosition.latitude >= 0 ? 'N' : 'S'},{' '}
-            {Math.abs(issPosition.longitude).toFixed(2)}°{issPosition.longitude >= 0 ? 'E' : 'W'}
+            {activeTrackedSat
+              ? `${Math.abs(activeTrackedSat.latitude).toFixed(1)}°${activeTrackedSat.latitude >= 0 ? 'N' : 'S'}, ${Math.abs(activeTrackedSat.longitude).toFixed(1)}°${activeTrackedSat.longitude >= 0 ? 'E' : 'W'}`
+              : `${Math.abs(issPosition.latitude).toFixed(2)}°${issPosition.latitude >= 0 ? 'N' : 'S'}, ${Math.abs(issPosition.longitude).toFixed(2)}°${issPosition.longitude >= 0 ? 'E' : 'W'}`}
           </span>
           <span aria-hidden="true" className="hidden text-slate-600 sm:inline">
             ·
           </span>
           <span className="tabular-clock hidden text-slate-400 sm:inline">
-            Alt {Math.round(issPosition.altitudeKm)} km
+            Alt {Math.round(activeTrackedSat ? activeTrackedSat.altitudeKm : issPosition.altitudeKm).toLocaleString()} km
           </span>
           <span aria-hidden="true" className="hidden text-slate-600 md:inline">
             ·
           </span>
           <span className="tabular-clock hidden text-slate-400 md:inline">
-            {Math.round(issPosition.velocityKmh).toLocaleString()} km/h
+            {Math.round(activeTrackedSat ? activeTrackedSat.velocityKmh : issPosition.velocityKmh).toLocaleString()} km/h
           </span>
+          {activeTrackedSat && (
+            <>
+              <span aria-hidden="true" className="hidden text-slate-600 lg:inline">
+                ·
+              </span>
+              <span className="tabular-clock hidden font-medium text-sky-300 lg:inline">
+                {activeTrackedSat.orbitType}
+              </span>
+            </>
+          )}
         </div>
 
-        <div className="pointer-events-auto flex items-center gap-2">
+        {/* Layer Toggles & Camera Controls */}
+        <div className="pointer-events-auto flex flex-wrap items-center gap-1.5 sm:gap-2">
           {!webglUnavailable && (
             <>
               <button
                 type="button"
-                onClick={handleTrackIss}
-                title="Rotate globe to live International Space Station position"
-                className={`inline-flex h-8 items-center gap-1.5 rounded-xl border px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
-                  trackingIss
-                    ? 'border-emerald-400/50 bg-emerald-500/20 text-emerald-200'
-                    : 'border-white/10 bg-[#081226]/90 text-slate-200 hover:border-white/20 hover:text-white'
+                onClick={() => setShowCablesLayer((v) => !v)}
+                aria-pressed={showCablesLayer}
+                title="Toggle glowing Submarine Fiber-Optic Cables & Country ISPs layer"
+                className={`inline-flex h-8 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-medium transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 ${
+                  showCablesLayer
+                    ? 'border-cyan-400/50 bg-cyan-500/20 text-cyan-200'
+                    : 'border-white/10 bg-[#081226]/90 text-slate-300 hover:border-white/20 hover:text-white'
                 }`}
               >
-                <Satellite className="h-3.5 w-3.5 text-emerald-400" aria-hidden="true" />
-                <span>Track ISS</span>
+                <Cable className="h-3.5 w-3.5 text-cyan-400" aria-hidden="true" />
+                <span>Cables &amp; ISPs</span>
               </button>
+
+              <button
+                type="button"
+                onClick={() => setShowSatellitesLayer((v) => !v)}
+                aria-pressed={showSatellitesLayer}
+                title="Toggle Live Orbiting Satellites constellation layer"
+                className={`inline-flex h-8 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-medium transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
+                  showSatellitesLayer
+                    ? 'border-emerald-400/50 bg-emerald-500/20 text-emerald-200'
+                    : 'border-white/10 bg-[#081226]/90 text-slate-300 hover:border-white/20 hover:text-white'
+                }`}
+              >
+                <Orbit className="h-3.5 w-3.5 text-emerald-400" aria-hidden="true" />
+                <span>Live Satellites</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => {
-                  trackingIssRef.current = false;
-                  setTrackingIss(false);
+                  trackedSatIdRef.current = null;
+                  setTrackedSatId(null);
                   resetViewRef.current?.();
                 }}
                 title="Re-center on focused country and resume gentle orbit"
-                className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-white/10 bg-[#081226]/90 px-3 text-xs font-medium text-slate-200 transition-colors hover:border-white/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+                className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-white/10 bg-[#081226]/90 px-2.5 text-xs font-medium text-slate-200 transition-colors hover:border-white/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
               >
                 <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-                <span className="hidden sm:inline">Recenter</span>
+                <span className="hidden xl:inline">Recenter</span>
               </button>
             </>
           )}
@@ -1081,15 +1356,15 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
             type="button"
             onClick={onToggleCollapse}
             aria-label="Collapse 3D Globe"
-            className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-white/10 bg-[#081226]/90 px-3 text-xs font-medium text-slate-200 transition-colors hover:border-white/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+            className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-white/10 bg-[#081226]/90 px-2.5 text-xs font-medium text-slate-200 transition-colors hover:border-white/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
           >
             <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
-            <span>Hide Globe</span>
+            <span className="hidden sm:inline">Hide</span>
           </button>
         </div>
       </div>
 
-      {/* 3D Photorealistic Earth Canvas Viewport (touch-none prevents mobile scroll interference) */}
+      {/* 3D Photorealistic Earth Canvas Viewport */}
       <div className="relative h-[320px] w-full sm:h-[380px] lg:h-[420px]">
         {webglUnavailable ? (
           <div className="flex h-full w-full items-center justify-center p-6">
@@ -1104,7 +1379,7 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
                   <line key={y} x1="0" y1={y} x2="100" y2={y} stroke="#38bdf8" strokeWidth="0.15" />
                 ))}
                 {[16.6, 33.3, 50, 66.6, 83.3].map((x) => (
-                  <line key={x} x1={x} y1="0" x2={x} y2="50" stroke="#38bdf8" strokeWidth="0.15" />
+                  <line key={x} x1={x} y1="0" x2={x} y2={50} stroke="#38bdf8" strokeWidth="0.15" />
                 ))}
                 {CONTINENT_POLYGONS.map((poly, idx) => (
                   <polygon
@@ -1145,8 +1420,46 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
         )}
       </div>
 
-      {/* Unified Bottom Dock HUD (Zero side-panel occlusion, no backdrop-filter over WebGL) */}
-      <div className="relative z-10 border-t border-white/[0.08] bg-[#081226]/95 px-5 py-3.5">
+      {/* Clickable Live Satellite Telemetry Badges Strip (shown when Live Satellites layer is active) */}
+      {showSatellitesLayer && (
+        <div className="relative z-10 border-t border-white/[0.06] bg-[#060f20]/96 px-4 py-2.5 sm:px-5">
+          <div className="no-scrollbar flex items-center gap-2 overflow-x-auto">
+            <span className="shrink-0 text-[11px] font-semibold text-slate-400 whitespace-nowrap">
+              Orbital Fleet:
+            </span>
+            {satellites.map((sat) => {
+              const isSelected = trackedSatId === sat.id;
+              return (
+                <button
+                  key={sat.id}
+                  type="button"
+                  onClick={() => handleTrackSatellite(sat.id)}
+                  title={`Track ${sat.name} · ${sat.category} · ${sat.orbitType} · ${Math.round(sat.altitudeKm).toLocaleString()} km · ${Math.round(sat.velocityKmh).toLocaleString()} km/h`}
+                  className={`inline-flex shrink-0 items-center gap-2 rounded-lg border px-2.5 py-1 text-[11px] transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+                    isSelected
+                      ? 'border-sky-400/60 bg-sky-500/20 text-white'
+                      : 'border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/20 hover:bg-white/[0.08] hover:text-white'
+                  }`}
+                >
+                  <span
+                    className="h-2 w-2 shrink-0 rounded-full"
+                    style={{ backgroundColor: sat.colorHex }}
+                    aria-hidden="true"
+                  />
+                  <span className="font-semibold">{sat.shortName}</span>
+                  <span className="tabular-clock text-slate-400">{sat.orbitType}</span>
+                  <span className="tabular-clock hidden text-slate-400 sm:inline">
+                    {Math.round(sat.altitudeKm).toLocaleString()} km
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Unified Bottom Dock HUD */}
+      <div className="relative z-10 border-t border-white/[0.08] bg-[#081226]/95 px-4 py-3.5 sm:px-5">
         <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
           {/* Focused Country Flag + Name + Capital + Coords */}
           <div className="flex min-w-0 items-center gap-3">
@@ -1188,7 +1501,7 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
             </div>
           </div>
 
-          {/* Focused Country Live Time, Weather, LKR Rate & Inspect CTA */}
+          {/* Focused Country Live Time, Weather, LKR Rate & Spotlight CTA */}
           <div className="flex flex-wrap items-center justify-between gap-4 md:justify-end">
             <div className="flex items-center gap-4">
               <div className="text-left md:text-right">
@@ -1234,11 +1547,36 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
               className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl bg-sky-500 px-3.5 text-xs font-semibold text-slate-950 transition-colors hover:bg-sky-400 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
             >
               <Info className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>Country Details</span>
+              <span>Country Spotlight</span>
               <Expand className="h-3 w-3 opacity-70" aria-hidden="true" />
             </button>
           </div>
         </div>
+
+        {/* Focused Country Submarine Cables & ISPs Telemetry Row (when Cables layer active) */}
+        {showCablesLayer && (
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-white/[0.07] pt-2.5 text-xs text-slate-300">
+            <div className="flex min-w-0 items-center gap-1.5">
+              <Wifi className="h-3.5 w-3.5 shrink-0 text-cyan-400" aria-hidden="true" />
+              <span className="shrink-0 font-semibold text-slate-400">ISPs:</span>
+              <span className="truncate text-slate-200">
+                {focusedConnectivity.isps.slice(0, 4).join(' · ')}
+              </span>
+            </div>
+            <span aria-hidden="true" className="hidden text-slate-600 sm:inline">
+              |
+            </span>
+            <div className="flex min-w-0 items-center gap-1.5">
+              <Cable className="h-3.5 w-3.5 shrink-0 text-amber-400" aria-hidden="true" />
+              <span className="shrink-0 font-semibold text-slate-400">
+                {focusedConnectivity.isLandlockedTransit ? 'Transit Cables:' : 'Submarine Cables:'}
+              </span>
+              <span className="truncate text-cyan-300">
+                {activeCablesList.map((c) => c.name).join(' · ')}
+              </span>
+            </div>
+          </div>
+        )}
       </div>
     </section>
   );

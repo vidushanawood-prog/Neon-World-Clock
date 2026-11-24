@@ -34,6 +34,7 @@ import {
   type WeatherEntry,
 } from './services/intelligence';
 import { estimateIssPosition, fetchIssPosition, type IssPosition } from './services/iss';
+import { propagateSatellites } from './services/satellites';
 import { playAlarmChime, playHourlyChime } from './utils/audio';
 import {
   clearActiveSession,
@@ -513,6 +514,12 @@ export default function App() {
   const focusedCountry = useMemo(() => {
     return COUNTRIES.find((c) => c.iso === focusedIso) || COUNTRIES[0];
   }, [focusedIso]);
+
+  // Live orbital satellite constellation (ISS + LEO/SSO/MEO/GEO fleet)
+  const liveSatellites = useMemo(
+    () => propagateSatellites(now.getTime(), issPosition),
+    [now, issPosition]
+  );
 
   // Determine exact instant displayed across all clocks
   const displayDate = useMemo(() => {
@@ -1043,12 +1050,13 @@ export default function App() {
           </div>
         </section>
 
-        {/* Interactive 3D Rotating Earth Globe Hero (with Live ISS Tracker) */}
+        {/* Interactive 3D Rotating Earth Globe Hero (with Cables, ISPs & Live Satellites) */}
         <div ref={globeSectionRef}>
           <EarthGlobe
             countries={COUNTRIES}
             focusedCountry={focusedCountry}
             issPosition={issPosition}
+            satellites={liveSatellites}
             pinnedSet={pinnedSet}
             displayDate={displayDate}
             is24Hour={is24Hour}
@@ -1310,7 +1318,7 @@ export default function App() {
                     </span>
                   </div>
                   <span className="hidden text-xs text-slate-400 sm:inline dark:text-slate-500">
-                    Click any card for quick info &amp; currency converter
+                    Click any card for 3D character spotlight, ISPs, satellites &amp; FX
                   </span>
                 </div>
 
@@ -1420,10 +1428,11 @@ export default function App() {
         onResetLive={handleResetLive}
       />
 
-      {/* Country Quick Info Modal */}
+      {/* Country Spotlight Modal (Auto-Rotating Dual Character Stage + Bottom Telemetry Dock) */}
       <CountryModal
         country={inspectedCountry}
         displayDate={displayDate}
+        satellites={liveSatellites}
         is24Hour={is24Hour}
         tempUnit={tempUnit}
         isPinned={inspectedCountry ? pinnedSet.has(inspectedCountry.iso) : false}
