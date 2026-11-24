@@ -51,6 +51,15 @@ import { AlarmModal, type WorldAlarm } from './components/AlarmModal';
 import { LandingPreview } from './components/LandingPreview';
 import { AuthGate } from './components/AuthGate';
 import { CinematicBootScreen } from './components/CinematicBootScreen';
+import {
+  ContinuousVoiceNarrator,
+  type VoiceInterruptSignal,
+} from './components/ContinuousVoiceNarrator';
+import {
+  buildCountryLines,
+  buildPanelLines,
+  type VoiceNarratorContext,
+} from './services/voiceNarrator';
 
 type EntryStage = 'landing' | 'auth' | 'booting' | 'dashboard';
 
@@ -235,13 +244,29 @@ export default function App() {
     };
   });
 
-  // Copy feedback & Toast
+  // Copy feedback, Toast & Continuous AI Voice Narrator Interrupt Signal
   const [copiedIso, setCopiedIso] = useState<string | null>(null);
   const [toast, setToast] = useState<{ id: number; title: string; detail?: string } | null>(null);
+  const [voiceInterrupt, setVoiceInterrupt] = useState<VoiceInterruptSignal | null>(null);
+  const voiceInterruptSeqRef = useRef<number>(1);
+  const voiceContextRef = useRef<VoiceNarratorContext | null>(null);
   const toastTimerRef = useRef<number | null>(null);
   const copyTimerRef = useRef<number | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const globeSectionRef = useRef<HTMLDivElement | null>(null);
+
+  const triggerVoiceLines = useCallback((lines: VoiceInterruptSignal['lines']) => {
+    if (lines.length === 0) return;
+    voiceInterruptSeqRef.current += 1;
+    setVoiceInterrupt({ id: voiceInterruptSeqRef.current, lines });
+  }, []);
+
+  const triggerVoicePanel = useCallback(
+    (topic: string, text: string) => {
+      triggerVoiceLines(buildPanelLines(topic, text));
+    },
+    [triggerVoiceLines]
+  );
 
   // Single 60fps-friendly requestAnimationFrame clock loop (fires state update only on second flip)
   useEffect(() => {
@@ -495,20 +520,31 @@ export default function App() {
     (country: Country, scrollToGlobe = true) => {
       setFocusedIso(country.iso);
       setGlobeCollapsed(false);
+      // Immediately narrate focused country's live time, weather & connectivity
+      if (voiceContextRef.current) {
+        triggerVoiceLines(buildCountryLines(country, voiceContextRef.current, false));
+      }
       // Ensure weather is loaded for the focused country
       fetchWeatherBatch([country]).then((updated) => setWeatherMap(updated));
       if (scrollToGlobe && globeSectionRef.current) {
         globeSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
     },
-    []
+    [triggerVoiceLines]
   );
 
-  const handleOpenDetails = useCallback((country: Country) => {
-    setFocusedIso(country.iso);
-    setInspectedCountry(country);
-    fetchWeatherBatch([country]).then((updated) => setWeatherMap(updated));
-  }, []);
+  const handleOpenDetails = useCallback(
+    (country: Country) => {
+      setFocusedIso(country.iso);
+      setInspectedCountry(country);
+      // Immediately narrate full Country Spotlight details
+      if (voiceContextRef.current) {
+        triggerVoiceLines(buildCountryLines(country, voiceContextRef.current, true));
+      }
+      fetchWeatherBatch([country]).then((updated) => setWeatherMap(updated));
+    },
+    [triggerVoiceLines]
+  );
 
   // Focused country object for 3D Globe
   const focusedCountry = useMemo(() => {
@@ -550,6 +586,37 @@ export default function App() {
       .map((iso) => byIso.get(iso))
       .filter((c): c is Country => Boolean(c));
   }, [pinnedIsos]);
+
+  // Live context snapshot for Continuous AI Voice Assistant
+  const voiceContext = useMemo<VoiceNarratorContext>(
+    () => ({
+      entryStage,
+      focusedCountry,
+      inspectedCountry,
+      pinnedCountries: pinnedCountriesOrdered,
+      displayDate,
+      is24Hour,
+      tempUnit,
+      weatherMap,
+      rates: fxState.rates,
+      issPosition,
+      satellites: liveSatellites,
+    }),
+    [
+      entryStage,
+      focusedCountry,
+      inspectedCountry,
+      pinnedCountriesOrdered,
+      displayDate,
+      is24Hour,
+      tempUnit,
+      weatherMap,
+      fxState.rates,
+      issPosition,
+      liveSatellites,
+    ]
+  );
+  voiceContextRef.current = voiceContext;
 
   const tabCounts = useMemo(() => {
     const counts: Record<FilterTab, number> = {
@@ -693,7 +760,11 @@ export default function App() {
     setEntryStage('dashboard');
     window.scrollTo({ top: 0, behavior: 'auto' });
     showToast('Command Center Active', 'All 215 regions and orbital telemetry synced');
-  }, [showToast]);
+    triggerVoicePanel(
+      'Command Center Active',
+      `Meridian Command Center is now online. Tracking ${COUNTRIES.length} regions, submarine cables, global stock markets, and the International Space Station.`
+    );
+  }, [showToast, triggerVoicePanel]);
 
   const handleLogout = useCallback(() => {
     clearActiveSession();
@@ -729,6 +800,7 @@ export default function App() {
   const handleResetLive = () => {
     setCompareConfig((prev) => ({ ...prev, active: false }));
     showToast('Live mode restored', 'Clocks synchronized to real time');
+    triggerVoicePanel('Live Clocks Restored', 'All global clocks are now synchronized back to live real time.');
   };
 
   const compareSliderMinutes = useMemo(() => {
@@ -737,38 +809,7 @@ export default function App() {
     return Math.min(1425, Math.round(total / 15) * 15);
   }, [compareConfig.timeStr]);
 
-  // Stage 1: Landing Preview Page
-  if (entryStage === 'landing') {
-    return (
-      <LandingPreview
-        now={now}
-        issPosition={issPosition}
-        onLaunch={() => setEntryStage('auth')}
-      />
-    );
-  }
-
-  // Stage 2: Client-Side Email/Password Auth + Interactive Human Verification Gate
-  if (entryStage === 'auth') {
-    return (
-      <AuthGate
-        onBack={() => setEntryStage('landing')}
-        onAuthenticated={handleAuthenticated}
-      />
-    );
-  }
-
-  // Stage 3: 10-Second Animated Cinematic Boot / Loading Screen
-  if (entryStage === 'booting') {
-    return (
-      <CinematicBootScreen
-        operatorEmail={authSession?.email || 'operator@meridian.local'}
-        onComplete={handleBootComplete}
-      />
-    );
-  }
-
-  return (
+  const dashboardContent = (
     <div className="relative min-h-screen text-slate-900 dark:text-slate-100">
       {/* Subtle Cosmic Atmospheric Background */}
       <div className="ambient-canvas" aria-hidden="true" />
@@ -889,7 +930,13 @@ export default function App() {
             {/* Flight Route & Jet Lag Calculator Trigger */}
             <button
               type="button"
-              onClick={() => setRouteModalOpen(true)}
+              onClick={() => {
+                setRouteModalOpen(true);
+                triggerVoicePanel(
+                  'Route & Jet Lag Calculator',
+                  'Opened the multi-stop flight route, layover, and jet lag calculator. Select your origin and destination cities to estimate timezone shifts and recovery guidance.'
+                );
+              }}
               aria-label="Open Multi-Stop Route & Jet Lag Calculator"
               title="Route, Layover & Jet Lag Calculator"
               className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-slate-200/90 bg-white/90 px-2.5 text-xs font-semibold text-slate-800 transition-colors hover:border-slate-300 hover:bg-white whitespace-nowrap shrink-0 lg:px-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-100 dark:hover:bg-white/[0.11]"
@@ -901,7 +948,13 @@ export default function App() {
             {/* World Alarms & Hourly Chime Trigger */}
             <button
               type="button"
-              onClick={() => setAlarmModalOpen(true)}
+              onClick={() => {
+                setAlarmModalOpen(true);
+                triggerVoicePanel(
+                  'World Alarms & Chime',
+                  `Opened World Alarms panel. You currently have ${alarms.filter((a) => a.enabled).length} active alarms scheduled.`
+                );
+              }}
               aria-label="Open World Alarms & Hourly Chime"
               title="World Alarms & Hourly Chime"
               className={`inline-flex h-9 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 lg:px-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
@@ -922,7 +975,13 @@ export default function App() {
             {/* Compare Time Button */}
             <button
               type="button"
-              onClick={() => setCompareModalOpen(true)}
+              onClick={() => {
+                setCompareModalOpen(true);
+                triggerVoicePanel(
+                  'Compare Global Time',
+                  'Opened Time Comparison panel. Pick any reference timezone and hour to preview synchronized local times across all 215 regions.'
+                );
+              }}
               className={`inline-flex h-9 items-center gap-1.5 rounded-xl px-2.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 lg:px-3.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
                 compareConfig.active
                   ? 'bg-sky-600 text-white shadow-sm hover:bg-sky-500 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400'
@@ -1067,6 +1126,7 @@ export default function App() {
             onToggleCollapse={() => setGlobeCollapsed((c) => !c)}
             onSelectCountry={(country) => handleFocusGlobe(country, false)}
             onInspectCountry={handleOpenDetails}
+            onLayerEvent={triggerVoicePanel}
           />
         </div>
 
@@ -1230,7 +1290,13 @@ export default function App() {
                   type="button"
                   role="tab"
                   aria-selected={isActive}
-                  onClick={() => setActiveTab(tab)}
+                  onClick={() => {
+                    setActiveTab(tab);
+                    triggerVoicePanel(
+                      `Region Filter · ${tab}`,
+                      `Switched world clock view to ${tab}, showing ${count} regions.`
+                    );
+                  }}
                   className={`inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-semibold transition-all whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
                     isActive
                       ? 'bg-slate-900 text-white shadow-sm dark:bg-sky-500 dark:text-slate-950'
@@ -1543,5 +1609,41 @@ export default function App() {
         </div>
       )}
     </div>
+  );
+
+  return (
+    <>
+      {entryStage === 'landing' ? (
+        <LandingPreview
+          now={now}
+          issPosition={issPosition}
+          onLaunch={() => {
+            setEntryStage('auth');
+            triggerVoicePanel(
+              'Operator Authentication',
+              'Opening operator sign in and human verification gate.'
+            );
+          }}
+        />
+      ) : entryStage === 'auth' ? (
+        <AuthGate
+          onBack={() => setEntryStage('landing')}
+          onAuthenticated={handleAuthenticated}
+        />
+      ) : entryStage === 'booting' ? (
+        <CinematicBootScreen
+          operatorEmail={authSession?.email || 'operator@meridian.local'}
+          onComplete={handleBootComplete}
+        />
+      ) : (
+        dashboardContent
+      )}
+
+      {/* Persistent Continuous Non-Stop AI Voice Assistant (never unmounts across stages) */}
+      <ContinuousVoiceNarrator
+        context={voiceContext}
+        interruptSignal={voiceInterrupt}
+      />
+    </>
   );
 }

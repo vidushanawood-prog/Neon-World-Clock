@@ -45,6 +45,7 @@ interface EarthGlobeProps {
   onToggleCollapse: () => void;
   onSelectCountry: (country: Country) => void;
   onInspectCountry: (country: Country) => void;
+  onLayerEvent?: (topic: string, text: string) => void;
 }
 
 // High-definition public satellite Earth texture URLs (Three-Globe / NASA Blue Marble)
@@ -283,6 +284,7 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
   onToggleCollapse,
   onSelectCountry,
   onInspectCountry,
+  onLayerEvent,
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const [webglUnavailable, setWebglUnavailable] = useState(false);
@@ -358,6 +360,13 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
     setTrackedSatId(satId);
     needsFocusGlideRef.current = true;
     pauseAutoRotateRef.current?.();
+    const sat = satellites.find((s) => s.id === satId);
+    if (sat) {
+      onLayerEvent?.(
+        `Tracking ${sat.shortName}`,
+        `Now tracking ${sat.name}, a ${sat.category.toLowerCase()} satellite in ${sat.orbitType} orbit at ${Math.round(sat.altitudeKm).toLocaleString()} kilometers altitude and ${Math.round(sat.velocityKmh).toLocaleString()} kilometers per hour.`
+      );
+    }
   };
 
   useEffect(() => {
@@ -1309,7 +1318,23 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
             <>
               <button
                 type="button"
-                onClick={() => setShowCablesLayer((v) => !v)}
+                onClick={() => {
+                  const next = !showCablesLayer;
+                  setShowCablesLayer(next);
+                  const activeCables =
+                    focusedConnectivity.directCables.length > 0
+                      ? focusedConnectivity.directCables
+                      : focusedConnectivity.transitCables;
+                  onLayerEvent?.(
+                    `Globe Layer · Cables & ISPs`,
+                    next
+                      ? `Submarine cables and ISP layer enabled. Highlighting ${activeCables
+                          .slice(0, 2)
+                          .map((c) => c.name)
+                          .join(' and ')} serving ${focusedCountry.name}.`
+                      : `Submarine cables layer hidden on the 3D globe.`
+                  );
+                }}
                 aria-pressed={showCablesLayer}
                 title="Toggle glowing Submarine Fiber-Optic Cables & Country ISPs layer"
                 className={`inline-flex h-8 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-medium transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 ${
@@ -1324,7 +1349,16 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
 
               <button
                 type="button"
-                onClick={() => setShowSatellitesLayer((v) => !v)}
+                onClick={() => {
+                  const next = !showSatellitesLayer;
+                  setShowSatellitesLayer(next);
+                  onLayerEvent?.(
+                    `Globe Layer · Live Satellites`,
+                    next
+                      ? `Live satellites orbital layer enabled. Tracking the International Space Station and ${satellites.length - 1} active spacecraft across LEO, MEO, and GEO orbits.`
+                      : `Live satellites constellation layer hidden on the 3D globe.`
+                  );
+                }}
                 aria-pressed={showSatellitesLayer}
                 title="Toggle Live Orbiting Satellites constellation layer"
                 className={`inline-flex h-8 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-medium transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
