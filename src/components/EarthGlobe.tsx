@@ -450,7 +450,11 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.18;
-    renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2));
+    const isMobileViewport =
+      window.innerWidth < 768 || window.matchMedia('(pointer: coarse)').matches;
+    renderer.setPixelRatio(
+      isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, isMobileViewport ? 1.5 : 2)
+    );
     renderer.setSize(width, height);
     renderer.setClearColor(0x000000, 0);
     renderer.domElement.style.touchAction = 'none';

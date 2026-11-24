@@ -1,10 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { RotateCcw, SkipForward, Volume2 } from 'lucide-react';
-import {
-  buildNextContinuousCycleLines,
-  type NarrationLine,
-  type VoiceNarratorContext,
-} from '../services/voiceNarrator';
+import { RotateCcw, Square, Volume2 } from 'lucide-react';
+import type { NarrationLine } from '../services/voiceNarrator';
 
 export interface VoiceInterruptSignal {
   id: number;
@@ -12,7 +8,6 @@ export interface VoiceInterruptSignal {
 }
 
 interface ContinuousVoiceNarratorProps {
-  context: VoiceNarratorContext;
   interruptSignal: VoiceInterruptSignal | null;
   isAnthemPlaying: boolean;
 }
@@ -40,37 +35,37 @@ function selectPreferredVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVo
   );
 }
 
+/**
+ * On-Demand AI Voice Assistant (Web Speech API, zero external API keys, zero background polling).
+ * - Speaks ONLY when triggered by a user action (country click, tab/section switch,
+ *   "Narrate Details", or "Read Overview").
+ * - Plays all queued sentences in logical order, then stops cleanly until the next action.
+ * - Strictly yields to any playing National Anthem (`isAnthemPlaying === true`) and
+ *   automatically resumes the selected country's queued details when the anthem ends/pauses.
+ */
 export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = ({
-  context,
   interruptSignal,
   isAnthemPlaying,
 }) => {
   const isSupported = typeof window !== 'undefined' && 'speechSynthesis' in window;
 
-  const [isUnlocked, setIsUnlocked] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [hasQueuedForAnthem, setHasQueuedForAnthem] = useState(false);
   const [activeLine, setActiveLine] = useState<NarrationLine>({
-    topic: 'AI Voice Narrator',
-    text: 'Tap anywhere to start continuous live global voice narration.',
+    topic: 'AI Voice Assistant',
+    text: 'On-demand narrator ready. Click a country, section, or Narrate button to listen.',
   });
 
-  // Always-fresh ref snapshots of live telemetry & anthem state
-  const contextRef = useRef<VoiceNarratorContext>(context);
-  contextRef.current = context;
   const isAnthemPlayingRef = useRef<boolean>(isAnthemPlaying);
   isAnthemPlayingRef.current = isAnthemPlaying;
   const prevAnthemPlayingRef = useRef<boolean>(isAnthemPlaying);
 
-  const unlockedRef = useRef<boolean>(false);
-  const gestureReceivedRef = useRef<boolean>(false);
   const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
   const queueRef = useRef<NarrationLine[]>([]);
+  const lastBatchRef = useRef<NarrationLine[]>([]);
   const currentLineRef = useRef<NarrationLine | null>(null);
-  const cycleStepRef = useRef<number>(0);
   const speakTokenRef = useRef<number>(0);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
-  const lastSpeakStartRef = useRef<number>(0);
-  const lastAdvanceAtRef = useRef<number>(0);
   const nextTimerRef = useRef<number | null>(null);
   const lastInterruptIdRef = useRef<number>(0);
 
@@ -81,29 +76,29 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
     }
   }, []);
 
-  const ensureQueuePopulated = useCallback(() => {
-    if (queueRef.current.length > 0) return;
-    const generated = buildNextContinuousCycleLines(
-      contextRef.current,
-      cycleStepRef.current
-    );
-    cycleStepRef.current += 1;
-    if (generated.length > 0) {
-      queueRef.current.push(...generated);
-    } else {
-      queueRef.current.push({
-        topic: 'World Clock Live',
-        text: 'Meridian global clock and orbital tracking are active.',
-      });
+  const stopSpeechCleanly = useCallback(() => {
+    clearPendingTimer();
+    speakTokenRef.current += 1;
+    queueRef.current = [];
+    currentLineRef.current = null;
+    setHasQueuedForAnthem(false);
+    setIsSpeaking(false);
+    if (!isSupported) return;
+    try {
+      window.speechSynthesis.cancel();
+    } catch {
+      // Ignore cancel quirks on older mobile browsers
     }
-  }, []);
+  }, [clearPendingTimer, isSupported]);
 
   const speakLine = useCallback(
     (line: NarrationLine) => {
       if (!isSupported) return;
-      // Never talk over an actively playing National Anthem
+
+      // Never talk over an actively playing National Anthem — hold at front of queue
       if (isAnthemPlayingRef.current) {
         queueRef.current.unshift(line);
+        setHasQueuedForAnthem(true);
         setIsSpeaking(false);
         return;
       }
@@ -114,13 +109,11 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
       const token = ++speakTokenRef.current;
       currentLineRef.current = line;
       setActiveLine(line);
-      lastSpeakStartRef.current = Date.now();
-      lastAdvanceAtRef.current = Date.now();
 
       try {
         synth.cancel();
       } catch {
-        // Ignore cancel quirks on older mobile browsers
+        // Ignore
       }
 
       const utterance = new SpeechSynthesisUtterance(line.text);
@@ -132,7 +125,7 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
       utterance.pitch = 1.0;
       utterance.volume = 1.0;
 
-      // Hold a strong reference so Chrome does not GC utterance before onend
+      // Strong reference prevents Chrome GC from dropping onend callbacks
       utteranceRef.current = utterance;
 
       utterance.onstart = () => {
@@ -144,79 +137,73 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
           }
           return;
         }
-        unlockedRef.current = true;
-        setIsUnlocked(true);
+        setHasQueuedForAnthem(false);
         setIsSpeaking(true);
-        lastSpeakStartRef.current = Date.now();
       };
 
       utterance.onend = () => {
         if (speakTokenRef.current !== token) return;
         setIsSpeaking(false);
-        lastAdvanceAtRef.current = Date.now();
+        currentLineRef.current = null;
         clearPendingTimer();
         if (isAnthemPlayingRef.current) return;
-        nextTimerRef.current = window.setTimeout(() => {
-          if (speakTokenRef.current !== token || isAnthemPlayingRef.current) return;
-          ensureQueuePopulated();
-          const next = queueRef.current.shift();
-          if (next) speakLine(next);
-        }, 260);
+
+        // Speak next sentence in this on-demand batch, OR stop cleanly when batch completes
+        if (queueRef.current.length > 0) {
+          nextTimerRef.current = window.setTimeout(() => {
+            if (speakTokenRef.current !== token || isAnthemPlayingRef.current) return;
+            const next = queueRef.current.shift();
+            if (next) speakLine(next);
+          }, 220);
+        }
       };
 
       utterance.onerror = (event) => {
         if (speakTokenRef.current !== token) return;
-        // If browser blocked autoplay before gesture, stay armed for first click/tap
-        if (event.error === 'not-allowed') {
-          setIsSpeaking(false);
-          if (!gestureReceivedRef.current) {
-            unlockedRef.current = false;
-            setIsUnlocked(false);
-          }
-          queueRef.current.unshift(line);
-          return;
-        }
         if (event.error === 'canceled' || event.error === 'interrupted') {
           return;
         }
-        if (isAnthemPlayingRef.current) {
-          setIsSpeaking(false);
+        setIsSpeaking(false);
+        currentLineRef.current = null;
+        if (event.error === 'not-allowed' || isAnthemPlayingRef.current) {
           return;
         }
-        // Recover automatically on any transient synthesis error
-        setIsSpeaking(false);
-        lastAdvanceAtRef.current = Date.now();
-        clearPendingTimer();
-        nextTimerRef.current = window.setTimeout(() => {
-          if (speakTokenRef.current !== token || isAnthemPlayingRef.current) return;
-          ensureQueuePopulated();
-          const next = queueRef.current.shift();
-          if (next) speakLine(next);
-        }, 500);
+        // Advance past a single failed utterance if more lines remain in the current batch
+        if (queueRef.current.length > 0) {
+          clearPendingTimer();
+          nextTimerRef.current = window.setTimeout(() => {
+            if (speakTokenRef.current !== token || isAnthemPlayingRef.current) return;
+            const next = queueRef.current.shift();
+            if (next) speakLine(next);
+          }, 320);
+        }
       };
 
       try {
         if (synth.paused) synth.resume();
         synth.speak(utterance);
       } catch {
-        // Watchdog will recover cleanly on next tick
+        setIsSpeaking(false);
       }
     },
-    [clearPendingTimer, ensureQueuePopulated, isSupported]
+    [clearPendingTimer, isSupported]
   );
 
   const speakNextFromQueue = useCallback(() => {
     if (isAnthemPlayingRef.current) return;
-    ensureQueuePopulated();
     const next = queueRef.current.shift();
     if (next) {
+      setHasQueuedForAnthem(false);
       speakLine(next);
+    } else {
+      setIsSpeaking(false);
+      setHasQueuedForAnthem(false);
     }
-  }, [ensureQueuePopulated, speakLine]);
+  }, [speakLine]);
 
   // Strict National Anthem Coordination:
-  // - When isAnthemPlaying becomes true -> immediately cancel speech & stay silent
-  // - When isAnthemPlaying becomes false -> automatically resume continuous narration
+  // - When isAnthemPlaying becomes true -> immediately cancel speech & preserve pending country queue
+  // - When isAnthemPlaying transitions true -> false -> automatically narrate preserved country details, then stop cleanly
   useEffect(() => {
     if (!isSupported) return;
     const wasPlaying = prevAnthemPlayingRef.current;
@@ -231,28 +218,26 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
         // Ignore
       }
       setIsSpeaking(false);
-      // Preserve the interrupted line at the front of the queue so narration resumes cleanly afterward
       if (currentLineRef.current && queueRef.current[0]?.text !== currentLineRef.current.text) {
         queueRef.current.unshift(currentLineRef.current);
       }
+      currentLineRef.current = null;
+      setHasQueuedForAnthem(queueRef.current.length > 0);
       return;
     }
 
-    // Anthem just ended / paused / stopped / errored -> automatically resume voice loop!
-    if (wasPlaying && !isAnthemPlaying) {
-      unlockedRef.current = true;
-      gestureReceivedRef.current = true;
-      setIsUnlocked(true);
+    // Anthem just finished / paused / stopped / errored -> resume queued country details if any
+    if (wasPlaying && !isAnthemPlaying && queueRef.current.length > 0) {
       clearPendingTimer();
       nextTimerRef.current = window.setTimeout(() => {
-        if (!isAnthemPlayingRef.current) {
+        if (!isAnthemPlayingRef.current && queueRef.current.length > 0) {
           speakNextFromQueue();
         }
-      }, 360);
+      }, 340);
     }
   }, [clearPendingTimer, isAnthemPlaying, isSupported, speakNextFromQueue]);
 
-  // Load voices & react to voiceschanged
+  // Load browser speech voices cleanly
   useEffect(() => {
     if (!isSupported) return;
     const synth = window.speechSynthesis;
@@ -272,146 +257,56 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
     synth.addEventListener?.('voiceschanged', refreshVoices);
     return () => {
       synth.removeEventListener?.('voiceschanged', refreshVoices);
-    };
-  }, [isSupported]);
-
-  // Unlock synchronously on first user gesture anywhere on the page
-  useEffect(() => {
-    if (!isSupported) return;
-
-    const unlockAndStart = () => {
-      if (gestureReceivedRef.current) return;
-      gestureReceivedRef.current = true;
-      unlockedRef.current = true;
-      setIsUnlocked(true);
-      if (isAnthemPlayingRef.current) return;
-      const synth = window.speechSynthesis;
-      if (!synth.speaking) {
-        speakNextFromQueue();
+      clearPendingTimer();
+      try {
+        synth.cancel();
+      } catch {
+        // Ignore
       }
     };
+  }, [clearPendingTimer, isSupported]);
 
-    // Attempt optimistic start right away (if browser allows autoplay, onstart flips unlockedRef=true;
-    // if blocked, gestureReceivedRef stays false so the very first click/tap unlocks synchronously)
-    const initialTimer = window.setTimeout(() => {
-      if (!unlockedRef.current && !gestureReceivedRef.current && !isAnthemPlayingRef.current) {
-        speakNextFromQueue();
-      }
-    }, 450);
-
-    const events: Array<keyof WindowEventMap> = ['pointerdown', 'click', 'touchstart', 'keydown'];
-    events.forEach((evt) =>
-      window.addEventListener(evt, unlockAndStart, { capture: true, passive: true })
-    );
-
-    return () => {
-      window.clearTimeout(initialTimer);
-      events.forEach((evt) => window.removeEventListener(evt, unlockAndStart, { capture: true }));
-    };
-  }, [isSupported, speakNextFromQueue]);
-
-  // Immediate Interrupt on Country Click, Panel Open, or Layer Toggle
+  // On-Demand Trigger: Country click, Section/Tab switch, "Narrate Details", or "Read Overview"
   useEffect(() => {
     if (!isSupported || !interruptSignal || interruptSignal.lines.length === 0) return;
     if (interruptSignal.id === lastInterruptIdRef.current) return;
     lastInterruptIdRef.current = interruptSignal.id;
 
-    // Replace pending queue with newly opened item's details so it speaks first,
-    // then continuous cycle seamlessly resumes afterward.
+    lastBatchRef.current = [...interruptSignal.lines];
     queueRef.current = [...interruptSignal.lines];
 
-    unlockedRef.current = true;
-    gestureReceivedRef.current = true;
-    setIsUnlocked(true);
-
-    // If a National Anthem is actively playing, hold these lines ready without speaking over it
+    // If National Anthem is currently playing, hold details silently until anthem ends/pauses
     if (isAnthemPlayingRef.current) {
       setActiveLine(interruptSignal.lines[0]);
+      setHasQueuedForAnthem(true);
       return;
     }
 
     speakNextFromQueue();
   }, [interruptSignal, isSupported, speakNextFromQueue]);
 
-  // Periodic Watchdog Interval: guarantees narration NEVER stops or stalls on its own
-  useEffect(() => {
-    if (!isSupported) return;
-
-    const watchdog = window.setInterval(() => {
-      if (!unlockedRef.current || isAnthemPlayingRef.current) return;
-      const synth = window.speechSynthesis;
-      const nowMs = Date.now();
-
-      // Chrome/Android recovery: unpause if synthesis spontaneously paused
-      if (synth.paused) {
-        try {
-          synth.resume();
-        } catch {
-          // Ignore
-        }
-      }
-
-      // Chrome long-utterance stall recovery: if speaking > 18s without onend, force next line
-      if (synth.speaking && lastSpeakStartRef.current > 0 && nowMs - lastSpeakStartRef.current > 18000) {
-        speakNextFromQueue();
-        return;
-      }
-
-      // If both speaking and pending went false and no timer is waiting, immediately feed next line
-      if (!synth.speaking && !synth.pending && nextTimerRef.current === null && nowMs - lastAdvanceAtRef.current > 950) {
-        speakNextFromQueue();
-      }
-    }, 1250);
-
-    return () => {
-      window.clearInterval(watchdog);
-      clearPendingTimer();
-      try {
-        window.speechSynthesis.cancel();
-      } catch {
-        // Ignore
-      }
-    };
-  }, [clearPendingTimer, isSupported, speakNextFromQueue]);
-
-  const handleReplayCurrent = (e: React.MouseEvent) => {
+  const handleReplayBatch = (e: React.MouseEvent) => {
     e.stopPropagation();
-    unlockedRef.current = true;
-    gestureReceivedRef.current = true;
-    setIsUnlocked(true);
     if (isAnthemPlayingRef.current) return;
-    if (currentLineRef.current) {
-      speakLine(currentLineRef.current);
-    } else {
+    if (lastBatchRef.current.length > 0) {
+      queueRef.current = [...lastBatchRef.current];
       speakNextFromQueue();
     }
   };
 
-  const handleNextLine = (e: React.MouseEvent) => {
+  const handleStop = (e: React.MouseEvent) => {
     e.stopPropagation();
-    unlockedRef.current = true;
-    gestureReceivedRef.current = true;
-    setIsUnlocked(true);
-    if (isAnthemPlayingRef.current) return;
-    speakNextFromQueue();
+    stopSpeechCleanly();
   };
 
   if (!isSupported) return null;
 
+  const canReplay = lastBatchRef.current.length > 0 && !isAnthemPlaying;
+
   return (
     <aside
-      aria-label="Continuous AI Voice Assistant"
-      onClick={() => {
-        if (!unlockedRef.current) {
-          unlockedRef.current = true;
-          gestureReceivedRef.current = true;
-          setIsUnlocked(true);
-          if (!isAnthemPlayingRef.current) {
-            speakNextFromQueue();
-          }
-        }
-      }}
-      className="fixed bottom-4 left-4 z-40 flex max-w-[calc(100vw-2rem)] items-center gap-2.5 rounded-2xl border border-sky-400/30 bg-[#071022]/95 px-3 py-2 text-slate-100 shadow-[0_12px_36px_-10px_rgba(14,165,233,0.45)] sm:max-w-[430px] sm:gap-3 sm:px-3.5 sm:py-2.5"
+      aria-label="On-Demand AI Voice Assistant"
+      className="fixed bottom-4 left-4 z-40 flex max-w-[calc(100vw-2rem)] items-center gap-2.5 rounded-2xl border border-sky-400/30 bg-[#071022]/95 px-3 py-2 text-slate-100 shadow-[0_12px_36px_-10px_rgba(14,165,233,0.45)] sm:max-w-[440px] sm:gap-3 sm:px-3.5 sm:py-2.5"
     >
       {/* Active Voice Icon */}
       <div
@@ -426,56 +321,68 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
         <Volume2 className="h-4 w-4" aria-hidden="true" />
       </div>
 
-      {/* Live Spoken Topic & Current Line */}
+      {/* Topic & Current Spoken Line */}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 text-[11px] font-semibold text-cyan-300">
           <span className="truncate">{activeLine.topic}</span>
           <span aria-hidden="true" className="text-slate-600">
             ·
           </span>
-          <span className={`shrink-0 ${isAnthemPlaying ? 'text-amber-300' : 'text-slate-400'}`}>
+          <span
+            className={`shrink-0 ${
+              isAnthemPlaying
+                ? 'text-amber-300'
+                : isSpeaking
+                  ? 'text-emerald-300'
+                  : 'text-slate-400'
+            }`}
+          >
             {isAnthemPlaying
-              ? 'Paused for Anthem'
-              : isUnlocked
-                ? isSpeaking
-                  ? 'Speaking'
-                  : 'Continuous'
-                : 'Tap to Start'}
+              ? hasQueuedForAnthem
+                ? 'Waiting for Anthem'
+                : 'Paused for Anthem'
+              : isSpeaking
+                ? 'Speaking'
+                : 'On-Demand'}
           </span>
         </div>
-        <p
-          className="mt-0.5 truncate text-xs text-slate-200"
-          title={activeLine.text}
-        >
+        <p className="mt-0.5 truncate text-xs text-slate-200" title={activeLine.text}>
           {isAnthemPlaying
-            ? 'Silent while National Anthem plays — resumes automatically when finished.'
+            ? 'Silent while National Anthem plays — details resume automatically when done.'
             : activeLine.text}
         </p>
       </div>
 
-      {/* Minimal Controls: Replay Current & Next Line (No Stop/Mute Dead-End) */}
+      {/* Controls: Replay Last Briefing & Stop Speaking */}
       <div className="flex shrink-0 items-center gap-1">
         <button
           type="button"
-          onClick={handleReplayCurrent}
-          disabled={isAnthemPlaying}
-          aria-label="Replay current narration line"
-          title={isAnthemPlaying ? 'Resumes after anthem finishes' : 'Replay current line'}
+          onClick={handleReplayBatch}
+          disabled={!canReplay}
+          aria-label="Replay last voice briefing"
+          title={
+            isAnthemPlaying
+              ? 'Resumes automatically after anthem'
+              : canReplay
+                ? 'Replay last voice briefing'
+                : 'Select a country or tap Narrate to listen'
+          }
           className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/12 bg-white/[0.05] text-slate-200 transition-colors hover:border-sky-400/40 hover:bg-sky-500/15 hover:text-white disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
         >
           <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
-        <button
-          type="button"
-          onClick={handleNextLine}
-          disabled={isAnthemPlaying}
-          aria-label="Next narration line"
-          title={isAnthemPlaying ? 'Resumes after anthem finishes' : 'Next narration line'}
-          className="inline-flex h-8 items-center gap-1 rounded-xl border border-sky-400/35 bg-sky-500/18 px-2.5 text-[11px] font-semibold text-sky-200 transition-colors hover:bg-sky-500/28 hover:text-white whitespace-nowrap disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
-        >
-          <span className="hidden sm:inline">Next</span>
-          <SkipForward className="h-3.5 w-3.5" aria-hidden="true" />
-        </button>
+        {isSpeaking && (
+          <button
+            type="button"
+            onClick={handleStop}
+            aria-label="Stop speaking"
+            title="Stop speaking"
+            className="inline-flex h-8 items-center gap-1 rounded-xl border border-rose-400/40 bg-rose-500/18 px-2.5 text-[11px] font-semibold text-rose-200 transition-colors hover:bg-rose-500/30 hover:text-white whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400"
+          >
+            <Square className="h-3 w-3 fill-current" aria-hidden="true" />
+            <span className="hidden sm:inline">Stop</span>
+          </button>
+        )}
       </div>
     </aside>
   );

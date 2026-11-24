@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowLeft,
   ArrowRightLeft,
+  BookOpen,
   Briefcase,
   Cable,
   Car,
@@ -26,6 +28,7 @@ import {
   Sunset,
   Trophy,
   Users,
+  Volume2,
   Wifi,
   Wind,
   X,
@@ -37,6 +40,7 @@ import {
   getCountryFootballProfile,
   getCountryTradeProfile,
 } from '../data/tradeAndBrands';
+import { getCountryOverviewParagraph } from '../data/countryOverviews';
 import {
   getOverheadSatellitesForCountry,
   type LiveSatellite,
@@ -77,6 +81,8 @@ interface CountryModalProps {
   onTogglePin: (iso: string) => void;
   onFocusOnGlobe: (country: Country) => void;
   onCopySummary: (country: Country, text: string) => void;
+  onNarrateCountry: (country: Country) => void;
+  onReadOverview: (country: Country, overviewText: string) => void;
 }
 
 export const CountryModal: React.FC<CountryModalProps> = ({
@@ -95,8 +101,11 @@ export const CountryModal: React.FC<CountryModalProps> = ({
   onTogglePin,
   onFocusOnGlobe,
   onCopySummary,
+  onNarrateCountry,
+  onReadOverview,
 }) => {
   const footballSectionRef = useRef<HTMLElement | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const [amountInput, setAmountInput] = useState<string>('100');
   const [converterDir, setConverterDir] = useState<'to-lkr' | 'from-lkr'>('to-lkr');
   const [copiedLocal, setCopiedLocal] = useState(false);
@@ -121,6 +130,9 @@ export const CountryModal: React.FC<CountryModalProps> = ({
     setConverterDir('to-lkr');
     setCopiedLocal(false);
     setFailedUrls(new Set());
+    if (scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = 0;
+    }
 
     let cancelled = false;
     const baseline = getBaselineCountryProfile(country);
@@ -137,13 +149,19 @@ export const CountryModal: React.FC<CountryModalProps> = ({
     };
   }, [country]);
 
+  // Lock body scroll cleanly while full-screen country view is open
   useEffect(() => {
     if (!country) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', handleKey);
+    };
   }, [country, onClose]);
 
   const clock = useMemo(() => {
@@ -198,6 +216,20 @@ export const CountryModal: React.FC<CountryModalProps> = ({
     [country]
   );
 
+  const overviewParagraph = useMemo(() => {
+    if (!country || !tradeProfile || !connectivity || !footballProfile || !activeProfile) {
+      return '';
+    }
+    return getCountryOverviewParagraph(country, tradeProfile, connectivity, footballProfile, {
+      subregion: activeProfile.subregion,
+      areaKm2: activeProfile.areaKm2,
+      drivingSide: activeProfile.drivingSide,
+      languages: activeProfile.languages,
+      leaderName: activeProfile.leader.name,
+      leaderTitle: activeProfile.leader.title,
+    });
+  }, [country, tradeProfile, connectivity, footballProfile, activeProfile]);
+
   useEffect(() => {
     if (!country || scrollTarget !== 'football') return;
     const t = window.setTimeout(() => {
@@ -251,17 +283,17 @@ export const CountryModal: React.FC<CountryModalProps> = ({
   const callStyles =
     clock.callStatus.level === 'good'
       ? {
-          dot: 'bg-emerald-500 dark:bg-emerald-400',
-          text: 'text-emerald-700 dark:text-emerald-300',
+          dot: 'bg-emerald-400',
+          text: 'text-emerald-300',
         }
       : clock.callStatus.level === 'window'
         ? {
-            dot: 'bg-amber-500 dark:bg-amber-400',
-            text: 'text-amber-700 dark:text-amber-300',
+            dot: 'bg-amber-400',
+            text: 'text-amber-300',
           }
         : {
-            dot: 'bg-rose-500 dark:bg-rose-400',
-            text: 'text-rose-700 dark:text-rose-300',
+            dot: 'bg-rose-400',
+            text: 'text-rose-300',
           };
 
   const activeCables =
@@ -288,186 +320,212 @@ export const CountryModal: React.FC<CountryModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4"
+      className="fixed inset-0 z-50 flex h-[100dvh] w-screen flex-col overflow-hidden bg-[#050a18] text-slate-100"
       role="dialog"
       aria-modal="true"
       aria-labelledby="country-modal-title"
     >
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 bg-slate-950/75 backdrop-blur-sm transition-opacity"
-        onClick={onClose}
-        aria-hidden="true"
-      />
+      {/* STICKY FULL-SCREEN HEADER */}
+      <header className="shrink-0 border-b border-white/[0.09] bg-[#060d1f] px-3.5 py-3 sm:px-6">
+        <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-2.5 sm:gap-4">
+          <div className="flex min-w-0 items-center gap-2.5 sm:gap-3.5">
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Back to World Clocks"
+              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-white/12 bg-white/[0.05] px-2.5 text-xs font-semibold text-slate-200 transition-colors hover:bg-white/[0.12] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 sm:px-3"
+            >
+              <ArrowLeft className="h-4 w-4 text-sky-400" aria-hidden="true" />
+              <span className="hidden sm:inline">Back</span>
+            </button>
 
-      {/* Country Spotlight Modal: Top Auto-Rotating Dual Character Stage + Bottom Scrollable Neon Telemetry Dock */}
-      <div className="relative z-10 flex max-h-[94vh] w-full max-w-3xl flex-col overflow-hidden rounded-3xl border border-sky-400/25 bg-[#070d1b]/95 text-slate-100 shadow-[0_24px_80px_-16px_rgba(14,165,233,0.38)]">
-        {/* TOP STAGE: Non-Interactive Auto-Rotating 3D Dual Character Showcase */}
-        <div className="relative shrink-0 border-b border-white/[0.1] bg-[#050a18]">
-          {/* Solid Top Bar Overlay (zero backdrop-filter over WebGL) */}
-          <div className="relative z-20 flex items-start justify-between gap-3 px-4 pt-3.5 pb-1 sm:px-6 sm:pt-4">
-            <div className="flex min-w-0 items-center gap-3">
-              {flagValid ? (
-                <img
-                  src={flagUrl}
-                  alt={`Flag of ${country.name}`}
-                  width={48}
-                  height={32}
-                  referrerPolicy="no-referrer"
-                  onError={() => markImageFailed(flagUrl)}
-                  className="h-8 w-12 shrink-0 rounded-lg object-cover ring-1 ring-white/20"
-                />
-              ) : (
-                <div className="flex h-8 w-12 shrink-0 items-center justify-center rounded-lg bg-slate-800 text-[11px] font-bold uppercase text-sky-300 ring-1 ring-white/20">
-                  {country.iso}
-                </div>
-              )}
-              <div className="min-w-0">
-                <h2
-                  id="country-modal-title"
-                  className="truncate text-lg font-bold tracking-tight text-white sm:text-xl"
-                >
-                  {country.name}
-                </h2>
-                <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-slate-400">
-                  <span className="font-medium text-slate-200">{country.capital}</span>
-                  <span aria-hidden="true">·</span>
-                  <span>{activeProfile.subregion}</span>
-                  <span aria-hidden="true" className="hidden sm:inline">
-                    ·
-                  </span>
-                  <span className="tabular-clock hidden uppercase sm:inline">{country.iso}</span>
-                </p>
+            {flagValid ? (
+              <img
+                src={flagUrl}
+                alt={`Flag of ${country.name}`}
+                width={48}
+                height={32}
+                referrerPolicy="no-referrer"
+                onError={() => markImageFailed(flagUrl)}
+                className="h-7 w-11 shrink-0 rounded-lg object-cover ring-1 ring-white/20 sm:h-8 sm:w-12"
+              />
+            ) : (
+              <div className="flex h-7 w-11 shrink-0 items-center justify-center rounded-lg bg-slate-800 text-[11px] font-bold uppercase text-sky-300 ring-1 ring-white/20 sm:h-8 sm:w-12">
+                {country.iso}
               </div>
-            </div>
+            )}
 
-            <div className="flex shrink-0 items-center gap-1.5">
-              <span
-                title="Turntable rotates automatically in a continuous 360° loop (manual rotation disabled)"
-                className="hidden items-center gap-1.5 rounded-lg border border-sky-400/25 bg-[#081327] px-2.5 py-1.5 text-[11px] font-medium text-sky-300 sm:inline-flex"
+            <div className="min-w-0">
+              <h2
+                id="country-modal-title"
+                className="truncate text-base font-bold tracking-tight text-white sm:text-xl"
               >
-                <Lock className="h-3 w-3" aria-hidden="true" />
-                <span>Auto-Rotate 360°</span>
-              </span>
-              <button
-                type="button"
-                onClick={() => onTogglePin(country.iso)}
-                aria-label={isPinned ? 'Unpin favorite' : 'Pin favorite'}
-                className={`flex h-9 w-9 items-center justify-center rounded-xl border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
-                  isPinned
-                    ? 'border-amber-400/40 bg-amber-400/15 text-amber-300'
-                    : 'border-white/12 bg-[#081327] text-slate-300 hover:bg-white/[0.1] hover:text-white'
-                }`}
-              >
-                <Star className="h-4 w-4" fill={isPinned ? 'currentColor' : 'none'} aria-hidden="true" />
-              </button>
-              <button
-                type="button"
-                onClick={onClose}
-                aria-label="Close country spotlight"
-                className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/12 bg-[#081327] text-slate-300 transition-colors hover:bg-white/[0.1] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
-              >
-                <X className="h-4 w-4" aria-hidden="true" />
-              </button>
+                {country.name}
+              </h2>
+              <p className="flex flex-wrap items-center gap-x-1.5 text-[11px] text-slate-400 sm:text-xs">
+                <span className="truncate font-medium text-slate-200">{country.capital}</span>
+                <span aria-hidden="true">·</span>
+                <span className="truncate">{activeProfile.subregion}</span>
+                <span aria-hidden="true" className="hidden md:inline">
+                  ·
+                </span>
+                <span className="tabular-clock hidden uppercase md:inline">{country.iso}</span>
+              </p>
             </div>
           </div>
 
-          {/* Locked Auto-Rotating 3D Dual Character Turntable Canvas */}
-          <CharacterTurntableStage country={country} />
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+            <button
+              type="button"
+              onClick={() => onNarrateCountry(country)}
+              aria-label={`Narrate ${country.name} details`}
+              title="On-Demand Voice Narrator: Read country details aloud"
+              className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-cyan-400/35 bg-cyan-500/15 px-2.5 text-xs font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/25 hover:text-white whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 sm:px-3"
+            >
+              <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
+              <span className="hidden sm:inline">Narrate Details</span>
+            </button>
 
-          {/* Quiet Cultural Ensemble Caption Bar */}
-          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.06] bg-[#070f21] px-4 py-2 text-[11px] text-slate-400 sm:px-6">
-            <span className="truncate text-slate-300">{culturalProfile.attireSummary}</span>
-            <span className="shrink-0 text-sky-300/90">
-              Continuous 360° Showcase Stage
-            </span>
+            <button
+              type="button"
+              onClick={() => onTogglePin(country.iso)}
+              aria-label={isPinned ? 'Unpin favorite' : 'Pin favorite'}
+              className={`flex h-9 w-9 items-center justify-center rounded-xl border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+                isPinned
+                  ? 'border-amber-400/40 bg-amber-400/15 text-amber-300'
+                  : 'border-white/12 bg-white/[0.05] text-slate-300 hover:bg-white/[0.12] hover:text-white'
+              }`}
+            >
+              <Star className="h-4 w-4" fill={isPinned ? 'currentColor' : 'none'} aria-hidden="true" />
+            </button>
+
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close country view"
+              className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/12 bg-white/[0.05] text-slate-300 transition-colors hover:bg-white/[0.12] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+            >
+              <X className="h-4 w-4" aria-hidden="true" />
+            </button>
           </div>
         </div>
+      </header>
 
-        {/* BOTTOM DOCK: Scrollable Neon Glassmorphism Telemetry Panel */}
-        <div className="flex-1 overflow-y-auto bg-gradient-to-b from-[#081123]/95 to-[#060b18]/98 px-4 py-5 space-y-6 sm:px-6">
-          {/* 1. Live Local Time/Date + Current Weather & Temperature */}
-          <div className="flex flex-col justify-between gap-5 sm:flex-row sm:items-center">
-            <div className="flex items-center gap-4 sm:gap-5">
-              <AnalogClock
-                hour24={clock.hour24}
-                minute={clock.minuteNum}
-                second={clock.secondNum}
-                isDaytime={clock.isDaytime}
-                size={84}
-              />
-              <div>
-                <div className="flex items-baseline gap-1.5">
-                  <span className="tabular-clock text-2xl font-bold tracking-tight text-white sm:text-3xl">
-                    {clock.hours}:{clock.minutes}
-                    <span className="text-base font-medium text-slate-400 sm:text-lg">
-                      :{clock.seconds}
-                    </span>
-                  </span>
-                  {!is24Hour && clock.dayPeriod && (
-                    <span className="tabular-clock text-sm font-semibold text-sky-400">
-                      {clock.dayPeriod}
-                    </span>
+      {/* FULL-SCREEN ADAPTIVE SCROLLABLE BODY */}
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto overflow-x-hidden bg-gradient-to-b from-[#071022] via-[#060c1b] to-[#050914]"
+      >
+        <div className="mx-auto w-full max-w-6xl space-y-6 px-4 pt-5 pb-24 sm:px-6 lg:px-8">
+          {/* HERO BAND: 3D Auto-Rotating Cultural Character Stage + Live Clock, Weather & Anthem */}
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
+            {/* Left / Top: Strictly Auto-Rotating 3D Dual Character Showcase */}
+            <div className="overflow-hidden rounded-3xl border border-sky-400/20 bg-[#050a18] lg:col-span-7">
+              <div className="flex items-center justify-between gap-2 border-b border-white/[0.06] bg-[#070f21] px-4 py-2.5 text-[11px]">
+                <span className="truncate font-semibold text-slate-200">
+                  {culturalProfile.attireSummary}
+                </span>
+                <span
+                  title="Turntable rotates automatically in a continuous 360° loop (manual rotation disabled)"
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-sky-400/25 bg-[#081327] px-2 py-1 text-[10px] font-semibold text-sky-300"
+                >
+                  <Lock className="h-3 w-3" aria-hidden="true" />
+                  <span>Auto-Rotate 360°</span>
+                </span>
+              </div>
+
+              {/* Non-Interactive 3D Character Turntable Canvas */}
+              <CharacterTurntableStage country={country} />
+            </div>
+
+            {/* Right / Bottom: Live Time, Analog Clock, Weather & National Anthem Bar */}
+            <div className="flex flex-col justify-between gap-4 rounded-3xl border border-white/[0.09] bg-[#081226]/90 p-5 lg:col-span-5">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between lg:flex-col lg:items-stretch">
+                {/* Clock + Analog */}
+                <div className="flex items-center gap-4">
+                  <AnalogClock
+                    hour24={clock.hour24}
+                    minute={clock.minuteNum}
+                    second={clock.secondNum}
+                    isDaytime={clock.isDaytime}
+                    size={84}
+                  />
+                  <div className="min-w-0">
+                    <div className="flex items-baseline gap-1.5">
+                      <span className="tabular-clock text-2xl font-bold tracking-tight text-white sm:text-3xl">
+                        {clock.hours}:{clock.minutes}
+                        <span className="text-base font-medium text-slate-400 sm:text-lg">
+                          :{clock.seconds}
+                        </span>
+                      </span>
+                      {!is24Hour && clock.dayPeriod && (
+                        <span className="tabular-clock text-sm font-semibold text-sky-400">
+                          {clock.dayPeriod}
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1 text-sm text-slate-200">{clock.fullDate}</p>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
+                      <span className="tabular-clock font-medium text-slate-200">{clock.utcOffset}</span>
+                      <span aria-hidden="true">·</span>
+                      <span className="truncate">{country.timezone}</span>
+                    </div>
+                    <div className={`mt-1.5 flex items-center gap-1.5 text-xs font-semibold ${callStyles.text}`}>
+                      <span className={`h-2 w-2 rounded-full ${callStyles.dot}`} aria-hidden="true" />
+                      <span>{clock.callStatus.label}</span>
+                      <span className="hidden font-normal text-slate-400 sm:inline">
+                        — {clock.callStatus.detail}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Live Weather Box */}
+                <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/[0.07] bg-slate-950/60 px-4 py-3">
+                  {weather ? (
+                    <>
+                      <div className="flex items-center gap-2.5">
+                        <WeatherIcon kind={weather.icon} className="h-6 w-6" />
+                        <div>
+                          <p className="tabular-clock text-xl font-bold text-white">
+                            {formatTemperature(weather.tempC, tempUnit)}
+                          </p>
+                          <p className="text-xs text-slate-300">{weather.label}</p>
+                        </div>
+                      </div>
+                      <div className="text-right text-xs text-slate-400">
+                        <p className="inline-flex items-center gap-1 text-slate-200">
+                          <Wind className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
+                          <span className="tabular-clock">{weather.windKmh} km/h</span>
+                        </p>
+                        <p className="mt-0.5 inline-flex items-center gap-1">
+                          {clock.isDaytime ? (
+                            <Sun className="h-3 w-3 text-amber-300" aria-hidden="true" />
+                          ) : (
+                            <Moon className="h-3 w-3 text-indigo-300" aria-hidden="true" />
+                          )}
+                          <span>{clock.isDaytime ? 'Daytime' : 'Nighttime'}</span>
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-xs text-slate-400">Fetching live weather…</p>
                   )}
                 </div>
-                <p className="mt-1 text-sm text-slate-200">{clock.fullDate}</p>
-                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
-                  <span className="tabular-clock font-medium text-slate-200">{clock.utcOffset}</span>
-                  <span aria-hidden="true">·</span>
-                  <span>{country.timezone}</span>
-                  <span aria-hidden="true">·</span>
-                  <span className="inline-flex items-center gap-1">
-                    {clock.isDaytime ? (
-                      <Sun className="h-3.5 w-3.5 text-amber-300" aria-hidden="true" />
-                    ) : (
-                      <Moon className="h-3.5 w-3.5 text-indigo-300" aria-hidden="true" />
-                    )}
-                    {clock.isDaytime ? 'Daytime' : 'Nighttime'}
-                  </span>
-                </div>
-                <div className={`mt-1.5 flex items-center gap-1.5 text-xs font-semibold ${callStyles.text}`}>
-                  <span className={`h-2 w-2 rounded-full ${callStyles.dot}`} aria-hidden="true" />
-                  <span>{clock.callStatus.label}</span>
-                  <span className="font-normal text-slate-400">— {clock.callStatus.detail}</span>
-                </div>
               </div>
-            </div>
 
-            {/* Weather & Temperature */}
-            <div className="flex items-center justify-between border-t border-white/[0.08] pt-4 sm:flex-col sm:items-end sm:border-t-0 sm:pt-0">
-              {weather ? (
-                <>
-                  <div className="flex items-center gap-2">
-                    <WeatherIcon kind={weather.icon} className="h-6 w-6" />
-                    <span className="tabular-clock text-2xl font-bold text-white">
-                      {formatTemperature(weather.tempC, tempUnit)}
-                    </span>
-                  </div>
-                  <div className="text-right text-xs text-slate-400">
-                    <p className="font-medium text-slate-200">{weather.label}</p>
-                    <p className="mt-0.5 inline-flex items-center gap-1">
-                      <Wind className="h-3 w-3" aria-hidden="true" />
-                      <span className="tabular-clock">{weather.windKmh} km/h</span>
-                      {weather.isFallback && <span>· Est.</span>}
-                    </p>
-                  </div>
-                </>
-              ) : (
-                <p className="text-xs text-slate-400">Fetching weather…</p>
-              )}
+              {/* National Anthem Auto-Play Control Bar */}
+              <NationalAnthemBar controller={anthemController} variant="modal" />
             </div>
           </div>
-
-          {/* 1B. National Anthem Auto-Play Control Bar */}
-          <NationalAnthemBar controller={anthemController} variant="modal" />
 
           {/* 2. Country Visual Highlights & Head of State / Government Profile */}
           <section
             aria-label="Country visual highlights and national leadership"
-            className="space-y-3.5 border-t border-white/[0.08] pt-5"
+            className="grid grid-cols-1 gap-4 lg:grid-cols-12"
           >
             {/* Head of State / Government Card */}
-            <div className="flex items-center justify-between gap-3.5 rounded-2xl border border-sky-400/20 bg-slate-900/65 p-3.5 sm:p-4">
+            <div className="flex items-center justify-between gap-3.5 rounded-2xl border border-sky-400/20 bg-slate-900/65 p-4 lg:col-span-5">
               <div className="flex min-w-0 items-center gap-3.5">
                 {leaderPortraitValid && activeProfile.leader.portraitUrl ? (
                   <img
@@ -478,10 +536,10 @@ export const CountryModal: React.FC<CountryModalProps> = ({
                     referrerPolicy="no-referrer"
                     loading="lazy"
                     onError={() => markImageFailed(activeProfile.leader.portraitUrl!)}
-                    className="h-14 w-14 shrink-0 rounded-xl bg-slate-950 object-cover object-top ring-1 ring-sky-400/35 sm:h-16 sm:w-16"
+                    className="h-16 w-16 shrink-0 rounded-xl bg-slate-950 object-cover object-top ring-1 ring-sky-400/35"
                   />
                 ) : coatOfArmsValid && activeProfile.coatOfArmsUrl ? (
-                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-sky-400/25 bg-slate-950/90 p-2 sm:h-16 sm:w-16">
+                  <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border border-sky-400/25 bg-slate-950/90 p-2">
                     <img
                       src={activeProfile.coatOfArmsUrl}
                       alt={`Coat of arms of ${country.name}`}
@@ -492,7 +550,7 @@ export const CountryModal: React.FC<CountryModalProps> = ({
                     />
                   </div>
                 ) : (
-                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-sky-400/25 bg-gradient-to-br from-sky-500/20 to-indigo-500/20 text-sky-300 sm:h-16 sm:w-16">
+                  <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl border border-sky-400/25 bg-gradient-to-br from-sky-500/20 to-indigo-500/20 text-sky-300">
                     <Landmark className="h-6 w-6" aria-hidden="true" />
                   </div>
                 )}
@@ -509,14 +567,13 @@ export const CountryModal: React.FC<CountryModalProps> = ({
                     {activeProfile.leader.title}
                   </p>
                   {activeProfile.leader.summary && (
-                    <p className="mt-1 line-clamp-1 text-[11px] text-slate-400">
+                    <p className="mt-1 line-clamp-2 text-[11px] text-slate-400">
                       {activeProfile.leader.summary}
                     </p>
                   )}
                 </div>
               </div>
 
-              {/* Optional Coat of Arms Emblem when Leader Portrait is shown */}
               {leaderPortraitValid && coatOfArmsValid && activeProfile.coatOfArmsUrl && (
                 <div
                   title={`National Emblem of ${country.name}`}
@@ -534,14 +591,14 @@ export const CountryModal: React.FC<CountryModalProps> = ({
               )}
             </div>
 
-            {/* Country Visual Images Gallery (Capital City & National Landmark / Scenic View) */}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {/* Country Visual Images Gallery */}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:col-span-7">
               {activeProfile.gallery.map((item, idx) => {
                 const hasValidImage = Boolean(item.imageUrl && !failedUrls.has(item.imageUrl));
                 return (
                   <figure
                     key={`${country.iso}-${item.label}-${idx}`}
-                    className="group relative h-36 overflow-hidden rounded-2xl border border-white/[0.1] bg-slate-900/75 sm:h-40"
+                    className="group relative h-40 overflow-hidden rounded-2xl border border-white/[0.1] bg-slate-900/75"
                   >
                     {hasValidImage && item.imageUrl ? (
                       <>
@@ -603,20 +660,14 @@ export const CountryModal: React.FC<CountryModalProps> = ({
                 );
               })}
             </div>
-
-            {activeProfile.countryExtract && (
-              <p className="line-clamp-2 text-xs leading-relaxed text-slate-400">
-                {activeProfile.countryExtract}
-              </p>
-            )}
           </section>
 
           {/* 3. Comprehensive Country Intelligence Specs Grid */}
           <section
             aria-label="Country key details"
-            className="grid grid-cols-2 gap-x-5 gap-y-4 border-t border-white/[0.08] pt-5 sm:grid-cols-4"
+            className="grid grid-cols-2 gap-3.5 sm:grid-cols-4"
           >
-            <div>
+            <div className="rounded-2xl border border-white/[0.08] bg-slate-900/55 p-3.5">
               <div className="flex items-center gap-1.5 text-xs text-slate-400">
                 <Globe2 className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
                 <span>Capital &amp; Region</span>
@@ -625,7 +676,7 @@ export const CountryModal: React.FC<CountryModalProps> = ({
               <p className="truncate text-[11px] text-slate-500">{activeProfile.subregion}</p>
             </div>
 
-            <div>
+            <div className="rounded-2xl border border-white/[0.08] bg-slate-900/55 p-3.5">
               <div className="flex items-center gap-1.5 text-xs text-slate-400">
                 <Users className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
                 <span>Population</span>
@@ -638,7 +689,7 @@ export const CountryModal: React.FC<CountryModalProps> = ({
               </p>
             </div>
 
-            <div>
+            <div className="rounded-2xl border border-white/[0.08] bg-slate-900/55 p-3.5">
               <div className="flex items-center gap-1.5 text-xs text-slate-400">
                 <Maximize2 className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
                 <span>Land Area</span>
@@ -653,12 +704,15 @@ export const CountryModal: React.FC<CountryModalProps> = ({
               <p className="text-[11px] text-slate-500">{solarData.season.hemisphere} Hem.</p>
             </div>
 
-            <div>
+            <div className="rounded-2xl border border-white/[0.08] bg-slate-900/55 p-3.5">
               <div className="flex items-center gap-1.5 text-xs text-slate-400">
                 <Languages className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
                 <span>Languages</span>
               </div>
-              <p className="mt-1 truncate text-sm font-semibold text-white" title={activeProfile.languages.join(', ')}>
+              <p
+                className="mt-1 truncate text-sm font-semibold text-white"
+                title={activeProfile.languages.join(', ')}
+              >
                 {activeProfile.languages.slice(0, 2).join(', ')}
               </p>
               <p className="truncate text-[11px] text-slate-500">
@@ -668,7 +722,7 @@ export const CountryModal: React.FC<CountryModalProps> = ({
               </p>
             </div>
 
-            <div>
+            <div className="rounded-2xl border border-white/[0.08] bg-slate-900/55 p-3.5">
               <div className="flex items-center gap-1.5 text-xs text-slate-400">
                 <Phone className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
                 <span>Calling Code</span>
@@ -679,7 +733,7 @@ export const CountryModal: React.FC<CountryModalProps> = ({
               <p className="text-[11px] text-slate-500">International dial</p>
             </div>
 
-            <div>
+            <div className="rounded-2xl border border-white/[0.08] bg-slate-900/55 p-3.5">
               <div className="flex items-center gap-1.5 text-xs text-slate-400">
                 <Car className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
                 <span>Driving Side</span>
@@ -692,7 +746,7 @@ export const CountryModal: React.FC<CountryModalProps> = ({
               </p>
             </div>
 
-            <div>
+            <div className="rounded-2xl border border-white/[0.08] bg-slate-900/55 p-3.5">
               <div className="flex items-center gap-1.5 text-xs text-slate-400">
                 <ArrowRightLeft className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
                 <span>Currency</span>
@@ -705,7 +759,7 @@ export const CountryModal: React.FC<CountryModalProps> = ({
               </p>
             </div>
 
-            <div>
+            <div className="rounded-2xl border border-white/[0.08] bg-slate-900/55 p-3.5">
               <div className="flex items-center gap-1.5 text-xs text-slate-400">
                 <MapPin className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
                 <span>Coordinates</span>
@@ -718,337 +772,383 @@ export const CountryModal: React.FC<CountryModalProps> = ({
             </div>
           </section>
 
-          {/* 3B. Trade, Exports & Famous Brands Card (All 215 Countries & Territories) */}
-          <section
-            aria-label={`Trade, exports, and famous brands of ${country.name}`}
-            className="border-t border-white/[0.08] pt-5"
-          >
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <h3 className="flex items-center gap-2 text-sm font-semibold text-white">
-                <Briefcase className="h-4 w-4 text-sky-400" aria-hidden="true" />
-                <span>Trade, Exports &amp; Famous Brands</span>
-              </h3>
-              <span className="text-xs text-slate-400">{country.name} Economy</span>
-            </div>
-
-            <p className="mt-1.5 text-xs text-slate-400">{tradeProfile.tradeHighlight}</p>
-
-            <div className="mt-3.5 grid grid-cols-1 gap-3.5 sm:grid-cols-2">
-              {/* Top Exports & Imports */}
-              <div className="rounded-2xl border border-white/[0.08] bg-slate-900/60 p-4 space-y-3">
-                <div>
-                  <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-300">
-                    <Package className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>Top Exports</span>
-                  </div>
-                  <p className="mt-1.5 text-xs leading-relaxed text-slate-200">
-                    {tradeProfile.topExports.join(' · ')}
-                  </p>
-                </div>
-                <div className="border-t border-white/[0.06] pt-2.5">
-                  <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-300">
-                    <ArrowRightLeft className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>Key Imports</span>
-                  </div>
-                  <p className="mt-1.5 text-xs leading-relaxed text-slate-300">
-                    {tradeProfile.topImports.join(' · ')}
-                  </p>
-                </div>
-              </div>
-
-              {/* Core Industries & Famous National / Global Brands */}
-              <div className="rounded-2xl border border-white/[0.08] bg-slate-900/60 p-4 space-y-3">
-                <div>
-                  <div className="flex items-center gap-1.5 text-xs font-semibold text-cyan-300">
-                    <Factory className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>Core Industries</span>
-                  </div>
-                  <p className="mt-1.5 text-xs leading-relaxed text-slate-200">
-                    {tradeProfile.coreIndustries.join(' · ')}
-                  </p>
-                </div>
-                <div className="border-t border-white/[0.06] pt-2.5">
-                  <div className="flex items-center gap-1.5 text-xs font-semibold text-sky-300">
-                    <Star className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>Famous National &amp; Global Brands</span>
-                  </div>
-                  <p className="mt-1.5 text-xs font-medium leading-relaxed text-white">
-                    {tradeProfile.famousBrands.join(' · ')}
-                  </p>
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* 3C. National Football Quick Profile */}
-          <section
-            id="country-football-section"
-            ref={footballSectionRef}
-            aria-label={`National Football profile of ${country.name}`}
-            className="border-t border-white/[0.08] pt-5"
-          >
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <h3 className="flex items-center gap-2 text-sm font-semibold text-white">
-                <Trophy className="h-4 w-4 text-amber-400" aria-hidden="true" />
-                <span>National Football</span>
-              </h3>
-              <span className="text-xs font-semibold text-amber-300">
-                {footballProfile.confederation}
-              </span>
-            </div>
-
-            <div className="mt-3 rounded-2xl border border-white/[0.08] bg-slate-900/60 p-4">
+          {/* 3B. Trade, Exports & Famous Brands + National Football */}
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
+            {/* Trade, Exports & Famous Brands */}
+            <section
+              aria-label={`Trade, exports, and famous brands of ${country.name}`}
+              className="rounded-3xl border border-white/[0.08] bg-slate-900/55 p-5 lg:col-span-8"
+            >
               <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <p className="text-sm font-bold text-white">{footballProfile.teamName}</p>
-                <span className="text-xs font-medium text-sky-300">
-                  {footballProfile.nickname}
-                </span>
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-white">
+                  <Briefcase className="h-4 w-4 text-sky-400" aria-hidden="true" />
+                  <span>Trade, Exports &amp; Famous Brands</span>
+                </h3>
+                <span className="text-xs text-slate-400">{country.name} Economy</span>
               </div>
-              <p className="mt-1.5 text-xs text-slate-300">{footballProfile.iconicMoment}</p>
-              <p className="mt-1 text-[11px] text-slate-400">
-                Home Ground: {footballProfile.homeStadium}
-              </p>
-            </div>
-          </section>
 
-          {/* 4. Major Internet Service Providers (ISPs) & Submarine Cable Connections */}
-          <section
-            aria-label="Submarine cables and major ISPs"
-            className="border-t border-white/[0.08] pt-5"
-          >
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <h3 className="flex items-center gap-2 text-sm font-semibold text-white">
-                <Cable className="h-4 w-4 text-cyan-400" aria-hidden="true" />
-                <span>Internet Service Providers (ISPs) &amp; Submarine Cables</span>
-              </h3>
-              <span className="text-xs text-slate-400">{connectivity.gatewaySummary}</span>
-            </div>
+              <p className="mt-1.5 text-xs text-slate-400">{tradeProfile.tradeHighlight}</p>
 
-            <div className="mt-3.5 grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {/* Major ISPs List */}
-              <div className="rounded-2xl border border-white/[0.08] bg-slate-900/60 p-4">
-                <div className="flex items-center gap-1.5 text-xs font-semibold text-cyan-300">
-                  <Wifi className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>Major National ISPs</span>
+              <div className="mt-3.5 grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+                <div className="space-y-3 rounded-2xl border border-white/[0.07] bg-slate-950/60 p-4">
+                  <div>
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-300">
+                      <Package className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Top Exports</span>
+                    </div>
+                    <p className="mt-1.5 text-xs leading-relaxed text-slate-200">
+                      {tradeProfile.topExports.join(' · ')}
+                    </p>
+                  </div>
+                  <div className="border-t border-white/[0.06] pt-2.5">
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-300">
+                      <ArrowRightLeft className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Key Imports</span>
+                    </div>
+                    <p className="mt-1.5 text-xs leading-relaxed text-slate-300">
+                      {tradeProfile.topImports.join(' · ')}
+                    </p>
+                  </div>
                 </div>
-                <ul className="mt-2.5 divide-y divide-white/[0.06] text-xs">
-                  {connectivity.isps.map((isp, idx) => (
-                    <li key={isp} className="flex items-center justify-between py-1.5 text-slate-200">
-                      <span className="font-medium">{isp}</span>
-                      <span className="tabular-clock text-[11px] text-slate-500">
-                        {idx === 0 ? 'Primary Backbone' : 'Broadband / 5G'}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
 
-              {/* Submarine Fiber-Optic Cables */}
-              <div className="rounded-2xl border border-white/[0.08] bg-slate-900/60 p-4">
-                <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-300">
-                  <Cable className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>
-                    {connectivity.isLandlockedTransit
-                      ? 'Nearest Regional Submarine Gateways'
-                      : 'Connected Submarine Fiber Cables'}
+                <div className="space-y-3 rounded-2xl border border-white/[0.07] bg-slate-950/60 p-4">
+                  <div>
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-cyan-300">
+                      <Factory className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Core Industries</span>
+                    </div>
+                    <p className="mt-1.5 text-xs leading-relaxed text-slate-200">
+                      {tradeProfile.coreIndustries.join(' · ')}
+                    </p>
+                  </div>
+                  <div className="border-t border-white/[0.06] pt-2.5">
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-sky-300">
+                      <Star className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Famous National &amp; Global Brands</span>
+                    </div>
+                    <p className="mt-1.5 text-xs font-medium leading-relaxed text-white">
+                      {tradeProfile.famousBrands.join(' · ')}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* National Football Quick Profile */}
+            <section
+              id="country-football-section"
+              ref={footballSectionRef}
+              aria-label={`National Football profile of ${country.name}`}
+              className="flex flex-col justify-between rounded-3xl border border-white/[0.08] bg-slate-900/55 p-5 lg:col-span-4"
+            >
+              <div>
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <h3 className="flex items-center gap-2 text-sm font-semibold text-white">
+                    <Trophy className="h-4 w-4 text-amber-400" aria-hidden="true" />
+                    <span>National Football</span>
+                  </h3>
+                  <span className="text-xs font-semibold text-amber-300">
+                    {footballProfile.confederation}
                   </span>
                 </div>
-                <ul className="mt-2.5 divide-y divide-white/[0.06] text-xs">
-                  {activeCables.map((cable) => (
-                    <li key={cable.id} className="py-2 first:pt-0.5 last:pb-0">
-                      <div className="flex items-center justify-between gap-2">
-                        <span
-                          className={`font-semibold ${
-                            cable.color === 'cyan' ? 'text-cyan-300' : 'text-amber-300'
-                          }`}
-                        >
-                          {cable.name}
+
+                <div className="mt-3.5 rounded-2xl border border-white/[0.07] bg-slate-950/60 p-4">
+                  <p className="text-sm font-bold text-white">{footballProfile.teamName}</p>
+                  <p className="mt-0.5 text-xs font-medium text-sky-300">
+                    {footballProfile.nickname}
+                  </p>
+                  <p className="mt-2.5 text-xs leading-relaxed text-slate-300">
+                    {footballProfile.iconicMoment}
+                  </p>
+                  <p className="mt-2.5 border-t border-white/[0.06] pt-2 text-[11px] text-slate-400">
+                    Home Ground: {footballProfile.homeStadium}
+                  </p>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          {/* 4. Major ISPs & Submarine Cables + Nearby Satellites & ISS */}
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
+            {/* ISPs & Submarine Cables */}
+            <section
+              aria-label="Submarine cables and major ISPs"
+              className="rounded-3xl border border-white/[0.08] bg-slate-900/55 p-5 lg:col-span-7"
+            >
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-white">
+                  <Cable className="h-4 w-4 text-cyan-400" aria-hidden="true" />
+                  <span>ISPs &amp; Submarine Cables</span>
+                </h3>
+                <span className="text-xs text-slate-400">{connectivity.gatewaySummary}</span>
+              </div>
+
+              <div className="mt-3.5 grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+                <div className="rounded-2xl border border-white/[0.07] bg-slate-950/60 p-4">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-cyan-300">
+                    <Wifi className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Major National ISPs</span>
+                  </div>
+                  <ul className="mt-2.5 divide-y divide-white/[0.06] text-xs">
+                    {connectivity.isps.map((isp, idx) => (
+                      <li key={isp} className="flex items-center justify-between py-1.5 text-slate-200">
+                        <span className="font-medium">{isp}</span>
+                        <span className="tabular-clock text-[11px] text-slate-500">
+                          {idx === 0 ? 'Primary Backbone' : 'Broadband / 5G'}
                         </span>
-                        <span className="tabular-clock text-[11px] text-slate-400">
-                          {cable.capacityTbps} Tbps · {cable.lengthKm.toLocaleString()} km
-                        </span>
-                      </div>
-                      <p className="mt-0.5 text-[11px] text-slate-400">{cable.regionLabel}</p>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-          </section>
-
-          {/* 5. Nearby / Overhead Satellites & ISS Pass Status */}
-          <section
-            aria-label="Overhead satellites and ISS pass status"
-            className="border-t border-white/[0.08] pt-5"
-          >
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <h3 className="flex items-center gap-2 text-sm font-semibold text-white">
-                <Satellite className="h-4 w-4 text-emerald-400" aria-hidden="true" />
-                <span>Nearby Satellites &amp; ISS Pass Status</span>
-              </h3>
-              <span className="tabular-clock text-xs text-emerald-300">
-                ISS: {overheadSats.issMatch.statusLabel} ({overheadSats.issMatch.distanceKm.toLocaleString()} km ground range)
-              </span>
-            </div>
-
-            <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-              {/* ISS Priority Telemetry Row */}
-              <div className="rounded-xl border border-emerald-400/30 bg-emerald-500/[0.08] px-3.5 py-2.5">
-                <div className="flex items-center justify-between gap-2 text-xs">
-                  <span className="font-semibold text-emerald-300">
-                    {overheadSats.issMatch.satellite.name}
-                  </span>
-                  <span className="tabular-clock font-semibold text-emerald-200">
-                    {overheadSats.issMatch.statusLabel}
-                  </span>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
-                <div className="tabular-clock mt-1 flex flex-wrap items-center gap-x-2 text-[11px] text-slate-300">
-                  <span>LEO</span>
-                  <span>·</span>
-                  <span>Alt {Math.round(overheadSats.issMatch.satellite.altitudeKm)} km</span>
-                  <span>·</span>
-                  <span>{Math.round(overheadSats.issMatch.satellite.velocityKmh).toLocaleString()} km/h</span>
-                </div>
-              </div>
 
-              {/* Top Nearest Constellation Satellites */}
-              {overheadSats.nearest.slice(0, 3).map(({ satellite, distanceKm, statusLabel }) => (
-                <div
-                  key={satellite.id}
-                  className="rounded-xl border border-white/[0.08] bg-slate-900/60 px-3.5 py-2.5"
-                >
-                  <div className="flex items-center justify-between gap-2 text-xs">
-                    <span className="flex items-center gap-1.5 font-semibold text-white">
-                      <span
-                        className="h-2 w-2 rounded-full"
-                        style={{ backgroundColor: satellite.colorHex }}
-                        aria-hidden="true"
-                      />
-                      {satellite.name}
+                <div className="rounded-2xl border border-white/[0.07] bg-slate-950/60 p-4">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-300">
+                    <Cable className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>
+                      {connectivity.isLandlockedTransit
+                        ? 'Regional Submarine Gateways'
+                        : 'Connected Submarine Cables'}
                     </span>
-                    <span className="tabular-clock text-[11px] text-sky-300">{statusLabel}</span>
                   </div>
-                  <div className="tabular-clock mt-1 flex flex-wrap items-center gap-x-2 text-[11px] text-slate-400">
-                    <span>{satellite.orbitType}</span>
+                  <ul className="mt-2.5 divide-y divide-white/[0.06] text-xs">
+                    {activeCables.map((cable) => (
+                      <li key={cable.id} className="py-2 first:pt-0.5 last:pb-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <span
+                            className={`font-semibold ${
+                              cable.color === 'cyan' ? 'text-cyan-300' : 'text-amber-300'
+                            }`}
+                          >
+                            {cable.name}
+                          </span>
+                          <span className="tabular-clock text-[11px] text-slate-400">
+                            {cable.capacityTbps} Tbps
+                          </span>
+                        </div>
+                        <p className="mt-0.5 text-[11px] text-slate-400">{cable.regionLabel}</p>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </section>
+
+            {/* Nearby Satellites & ISS Pass Status */}
+            <section
+              aria-label="Overhead satellites and ISS pass status"
+              className="rounded-3xl border border-white/[0.08] bg-slate-900/55 p-5 lg:col-span-5"
+            >
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-white">
+                  <Satellite className="h-4 w-4 text-emerald-400" aria-hidden="true" />
+                  <span>Satellites &amp; ISS Pass</span>
+                </h3>
+                <span className="tabular-clock text-xs text-emerald-300">
+                  {overheadSats.issMatch.distanceKm.toLocaleString()} km
+                </span>
+              </div>
+
+              <div className="mt-3.5 space-y-2.5">
+                <div className="rounded-xl border border-emerald-400/30 bg-emerald-500/[0.08] px-3.5 py-2.5">
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="font-semibold text-emerald-300">
+                      {overheadSats.issMatch.satellite.name}
+                    </span>
+                    <span className="tabular-clock font-semibold text-emerald-200">
+                      {overheadSats.issMatch.statusLabel}
+                    </span>
+                  </div>
+                  <div className="tabular-clock mt-1 flex flex-wrap items-center gap-x-2 text-[11px] text-slate-300">
+                    <span>LEO</span>
                     <span>·</span>
-                    <span>{satellite.category}</span>
+                    <span>Alt {Math.round(overheadSats.issMatch.satellite.altitudeKm)} km</span>
                     <span>·</span>
-                    <span>{distanceKm.toLocaleString()} km</span>
+                    <span>
+                      {Math.round(overheadSats.issMatch.satellite.velocityKmh).toLocaleString()} km/h
+                    </span>
                   </div>
                 </div>
-              ))}
-            </div>
-          </section>
 
-          {/* 6. Currency & Live Exchange Rate (including LKR & USD Converter) */}
-          <section
-            aria-label="Currency and live exchange rate"
-            className="border-t border-white/[0.08] pt-5"
-          >
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <h3 className="text-sm font-semibold text-white">
-                Currency &amp; Exchange Converter ({country.currency} · {country.currencySymbol})
-              </h3>
-              <span className="tabular-clock text-xs text-slate-400">
-                {ratesAreLive ? 'Live rates' : 'Reference rates'} · 1 {country.currency} ={' '}
-                {oneUnitToLkr >= 1 ? oneUnitToLkr.toFixed(2) : oneUnitToLkr.toFixed(4)} LKR · $
-                {oneUnitToUsd >= 0.01 ? oneUnitToUsd.toFixed(3) : oneUnitToUsd.toFixed(5)} USD
-              </span>
-            </div>
+                {overheadSats.nearest.slice(0, 3).map(({ satellite, distanceKm, statusLabel }) => (
+                  <div
+                    key={satellite.id}
+                    className="rounded-xl border border-white/[0.07] bg-slate-950/60 px-3.5 py-2.5"
+                  >
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <span className="flex items-center gap-1.5 font-semibold text-white">
+                        <span
+                          className="h-2 w-2 rounded-full"
+                          style={{ backgroundColor: satellite.colorHex }}
+                          aria-hidden="true"
+                        />
+                        {satellite.name}
+                      </span>
+                      <span className="tabular-clock text-[11px] text-sky-300">{statusLabel}</span>
+                    </div>
+                    <div className="tabular-clock mt-1 flex flex-wrap items-center gap-x-2 text-[11px] text-slate-400">
+                      <span>{satellite.orbitType}</span>
+                      <span>·</span>
+                      <span>{satellite.category}</span>
+                      <span>·</span>
+                      <span>{distanceKm.toLocaleString()} km</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
 
-            <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
-              <div className="flex flex-1 items-center gap-2">
-                <input
-                  type="number"
-                  min="0"
-                  step="any"
-                  value={amountInput}
-                  onChange={(e) => setAmountInput(e.target.value)}
-                  aria-label={`Amount in ${fromCode}`}
-                  className="tabular-clock h-11 w-full rounded-xl border border-white/12 bg-slate-950/80 px-3.5 text-sm font-semibold text-white focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-400/20"
-                />
-                <span className="tabular-clock shrink-0 text-xs font-bold text-slate-300">
-                  {fromCode}
+          {/* 5. Currency Converter & Solar Daylight Bar */}
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
+            <section
+              aria-label="Currency and live exchange rate"
+              className="rounded-3xl border border-white/[0.08] bg-slate-900/55 p-5 lg:col-span-7"
+            >
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h3 className="text-sm font-semibold text-white">
+                  Currency Converter ({country.currency} · {country.currencySymbol})
+                </h3>
+                <span className="tabular-clock text-xs text-slate-400">
+                  {ratesAreLive ? 'Live rates' : 'Reference'} · 1 {country.currency} ={' '}
+                  {oneUnitToLkr >= 1 ? oneUnitToLkr.toFixed(2) : oneUnitToLkr.toFixed(4)} LKR · $
+                  {oneUnitToUsd >= 0.01 ? oneUnitToUsd.toFixed(3) : oneUnitToUsd.toFixed(5)} USD
                 </span>
+              </div>
+
+              <div className="mt-3.5 flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="flex flex-1 items-center gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={amountInput}
+                    onChange={(e) => setAmountInput(e.target.value)}
+                    aria-label={`Amount in ${fromCode}`}
+                    className="tabular-clock h-11 w-full rounded-xl border border-white/12 bg-slate-950/80 px-3.5 text-sm font-semibold text-white focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-400/20"
+                  />
+                  <span className="tabular-clock shrink-0 text-xs font-bold text-slate-300">
+                    {fromCode}
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setConverterDir((d) => (d === 'to-lkr' ? 'from-lkr' : 'to-lkr'))
+                  }
+                  aria-label="Swap conversion direction"
+                  title="Swap direction"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center self-center rounded-xl border border-white/12 text-slate-300 transition-colors hover:bg-white/[0.08] hover:text-white"
+                >
+                  <ArrowRightLeft className="h-4 w-4" aria-hidden="true" />
+                </button>
+
+                <div className="flex flex-1 flex-col rounded-xl bg-slate-950/75 px-4 py-2">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="tabular-clock text-base font-bold text-white">
+                      {convertedPrimary.toLocaleString(undefined, {
+                        maximumFractionDigits: convertedPrimary >= 100 ? 2 : 4,
+                      })}
+                    </span>
+                    <span className="tabular-clock text-xs font-bold text-sky-400">
+                      {toPrimaryCode}
+                    </span>
+                  </div>
+                  {toPrimaryCode !== 'USD' && fromCode !== 'USD' && (
+                    <span className="tabular-clock text-[11px] text-slate-400">
+                      ≈ $
+                      {convertedUsd.toLocaleString(undefined, {
+                        maximumFractionDigits: 2,
+                      })}{' '}
+                      USD
+                    </span>
+                  )}
+                </div>
+              </div>
+            </section>
+
+            {/* Solar Season & Daylight Duration Bar */}
+            <section
+              aria-label="Season and solar daylight duration"
+              className="flex flex-col justify-center rounded-3xl border border-white/[0.08] bg-slate-900/55 p-5 lg:col-span-5"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-white">{solarData.season.season} Season</span>
+                  <span aria-hidden="true" className="text-slate-600">
+                    ·
+                  </span>
+                  <span className="text-slate-400">{solarData.season.hemisphere} Hem.</span>
+                </div>
+                <span className="tabular-clock font-semibold text-slate-200">
+                  {solarData.daylight.daylightHoursStr} ({solarData.daylight.progressPercent}%)
+                </span>
+              </div>
+
+              <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-800">
+                <div
+                  style={{ width: `${solarData.daylight.progressPercent}%` }}
+                  className={`h-full rounded-full transition-all duration-300 ${
+                    solarData.daylight.isAfterSunriseBeforeSunset
+                      ? 'bg-gradient-to-r from-amber-400 via-yellow-400 to-sky-400'
+                      : 'bg-indigo-500/60'
+                  }`}
+                />
+              </div>
+
+              <div className="tabular-clock mt-2.5 flex items-center justify-between text-xs text-slate-400">
+                <span className="inline-flex items-center gap-1.5">
+                  <Sunrise className="h-3.5 w-3.5 text-amber-300" aria-hidden="true" />
+                  Sunrise {solarData.daylight.sunriseStr}
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  Sunset {solarData.daylight.sunsetStr}
+                  <Sunset className="h-3.5 w-3.5 text-indigo-300" aria-hidden="true" />
+                </span>
+              </div>
+            </section>
+          </div>
+
+          {/* 6. DETAILED COUNTRY OVERVIEW PARAGRAPH (Bottom Section of Every Country Page) */}
+          <section
+            aria-label={`Detailed overview of ${country.name}`}
+            className="rounded-3xl border border-sky-400/25 bg-gradient-to-br from-[#09152b]/95 via-[#071124]/95 to-[#060d1c]/95 p-5 sm:p-6"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.08] pb-3.5">
+              <div className="flex items-center gap-2.5">
+                <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-sky-400/30 bg-sky-500/15 text-sky-300">
+                  <BookOpen className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <div>
+                  <h3 className="text-sm font-bold text-white sm:text-base">
+                    About {country.name} — Detailed Country Overview
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Geography, history &amp; culture, economy, and global significance
+                  </p>
+                </div>
               </div>
 
               <button
                 type="button"
-                onClick={() =>
-                  setConverterDir((d) => (d === 'to-lkr' ? 'from-lkr' : 'to-lkr'))
-                }
-                aria-label="Swap conversion direction"
-                title="Swap direction"
-                className="flex h-10 w-10 shrink-0 items-center justify-center self-center rounded-xl border border-white/12 text-slate-300 transition-colors hover:bg-white/[0.08] hover:text-white"
+                onClick={() => onReadOverview(country, overviewParagraph)}
+                className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-cyan-400/40 bg-cyan-500/18 px-3.5 text-xs font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/30 hover:text-white whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
               >
-                <ArrowRightLeft className="h-4 w-4" aria-hidden="true" />
+                <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Read Overview</span>
               </button>
-
-              <div className="flex flex-1 flex-col rounded-xl bg-white/[0.05] px-4 py-2">
-                <div className="flex items-baseline justify-between gap-2">
-                  <span className="tabular-clock text-base font-bold text-white">
-                    {convertedPrimary.toLocaleString(undefined, {
-                      maximumFractionDigits: convertedPrimary >= 100 ? 2 : 4,
-                    })}
-                  </span>
-                  <span className="tabular-clock text-xs font-bold text-sky-400">
-                    {toPrimaryCode}
-                  </span>
-                </div>
-                {toPrimaryCode !== 'USD' && fromCode !== 'USD' && (
-                  <span className="tabular-clock text-[11px] text-slate-400">
-                    ≈ $
-                    {convertedUsd.toLocaleString(undefined, {
-                      maximumFractionDigits: 2,
-                    })}{' '}
-                    USD
-                  </span>
-                )}
-              </div>
             </div>
+
+            <p className="mt-4 text-sm leading-7 text-slate-200 sm:text-[15px] sm:leading-8">
+              {overviewParagraph}
+            </p>
           </section>
-
-          {/* 7. Season & Solar Daylight Duration Bar */}
-          <div className="border-t border-white/[0.08] pt-5">
-            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-white">{solarData.season.season} Season</span>
-                <span aria-hidden="true" className="text-slate-600">
-                  ·
-                </span>
-                <span className="text-slate-400">{solarData.season.hemisphere} Hemisphere</span>
-              </div>
-              <span className="tabular-clock font-semibold text-slate-200">
-                Daylight: {solarData.daylight.daylightHoursStr} ({solarData.daylight.progressPercent}%)
-              </span>
-            </div>
-
-            <div className="mt-2.5 h-2 w-full overflow-hidden rounded-full bg-slate-800">
-              <div
-                style={{ width: `${solarData.daylight.progressPercent}%` }}
-                className={`h-full rounded-full transition-all duration-300 ${
-                  solarData.daylight.isAfterSunriseBeforeSunset
-                    ? 'bg-gradient-to-r from-amber-400 via-yellow-400 to-sky-400'
-                    : 'bg-indigo-500/60'
-                }`}
-              />
-            </div>
-
-            <div className="tabular-clock mt-2 flex items-center justify-between text-xs text-slate-400">
-              <span className="inline-flex items-center gap-1.5">
-                <Sunrise className="h-3.5 w-3.5 text-amber-300" aria-hidden="true" />
-                Sunrise {solarData.daylight.sunriseStr}
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                Sunset {solarData.daylight.sunsetStr}
-                <Sunset className="h-3.5 w-3.5 text-indigo-300" aria-hidden="true" />
-              </span>
-            </div>
-          </div>
         </div>
+      </div>
 
-        {/* Modal Footer Actions */}
-        <div className="flex flex-wrap items-center justify-between gap-2.5 border-t border-white/[0.08] bg-[#060c1a] px-4 py-3.5 sm:px-6">
+      {/* STICKY BOTTOM ACTION FOOTER */}
+      <footer className="shrink-0 border-t border-white/[0.09] bg-[#060c1a] px-3.5 py-3 sm:px-6">
+        <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-2.5">
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -1056,23 +1156,23 @@ export const CountryModal: React.FC<CountryModalProps> = ({
                 onFocusOnGlobe(country);
                 onClose();
               }}
-              className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-white/12 bg-white/[0.06] px-3.5 text-xs font-semibold text-slate-200 transition-colors hover:bg-white/[0.12] hover:text-white"
+              className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-white/12 bg-white/[0.06] px-3 text-xs font-semibold text-slate-200 transition-colors hover:bg-white/[0.12] hover:text-white sm:px-3.5"
             >
               <Compass className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
-              Focus Cables on Globe
+              <span>Focus Cables on Globe</span>
             </button>
 
             <button
               type="button"
               onClick={handleCopy}
-              className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-white/12 bg-white/[0.06] px-3.5 text-xs font-semibold text-slate-200 transition-colors hover:bg-white/[0.12] hover:text-white"
+              className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-white/12 bg-white/[0.06] px-3 text-xs font-semibold text-slate-200 transition-colors hover:bg-white/[0.12] hover:text-white sm:px-3.5"
             >
               {copiedLocal ? (
                 <Check className="h-3.5 w-3.5 text-emerald-400" aria-hidden="true" />
               ) : (
                 <Copy className="h-3.5 w-3.5" aria-hidden="true" />
               )}
-              {copiedLocal ? 'Copied!' : 'Copy Summary'}
+              <span>{copiedLocal ? 'Copied!' : 'Copy Summary'}</span>
             </button>
           </div>
 
@@ -1080,13 +1180,13 @@ export const CountryModal: React.FC<CountryModalProps> = ({
             href={mapsUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-sky-500 px-4 text-xs font-semibold text-slate-950 transition-colors hover:bg-sky-400"
+            className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-sky-500 px-3.5 text-xs font-semibold text-slate-950 transition-colors hover:bg-sky-400 sm:px-4"
           >
             <span>Open in Google Maps</span>
             <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
           </a>
         </div>
-      </div>
+      </footer>
     </div>
   );
 };

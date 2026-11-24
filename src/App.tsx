@@ -8,6 +8,7 @@ import {
   Clock,
   Coins,
   Globe2,
+  LayoutDashboard,
   LogOut,
   Menu,
   Moon,
@@ -61,6 +62,7 @@ import {
   type VoiceInterruptSignal,
 } from './components/ContinuousVoiceNarrator';
 import { CryptoLiveSection } from './components/CryptoLiveSection';
+import { UserDashboardSection } from './components/UserDashboardSection';
 import {
   NationalAnthemBar,
   useNationalAnthem,
@@ -258,7 +260,7 @@ export default function App() {
   const [copiedIso, setCopiedIso] = useState<string | null>(null);
   const [toast, setToast] = useState<{ id: number; title: string; detail?: string } | null>(null);
   const [menuOpen, setMenuOpen] = useState<boolean>(false);
-  const [activeSection, setActiveSection] = useState<'globe' | 'crypto'>('globe');
+  const [activeSection, setActiveSection] = useState<'globe' | 'crypto' | 'dashboard'>('globe');
   const [globeLayerCommand, setGlobeLayerCommand] = useState<{
     id: number;
     target: 'cables' | 'satellites';
@@ -573,6 +575,22 @@ export default function App() {
     [anthemController, triggerVoiceLines]
   );
 
+  const handleNarrateCountry = useCallback(
+    (country: Country) => {
+      if (voiceContextRef.current) {
+        triggerVoiceLines(buildCountryLines(country, voiceContextRef.current, true));
+      }
+    },
+    [triggerVoiceLines]
+  );
+
+  const handleReadOverview = useCallback(
+    (country: Country, overviewText: string) => {
+      triggerVoicePanel(`Overview · ${country.name}`, overviewText);
+    },
+    [triggerVoicePanel]
+  );
+
   // Focused country object for 3D Globe
   const focusedCountry = useMemo(() => {
     return COUNTRIES.find((c) => c.iso === focusedIso) || COUNTRIES[0];
@@ -614,36 +632,20 @@ export default function App() {
       .filter((c): c is Country => Boolean(c));
   }, [pinnedIsos]);
 
-  // Live context snapshot for Continuous AI Voice Assistant
-  const voiceContext = useMemo<VoiceNarratorContext>(
-    () => ({
-      entryStage,
-      focusedCountry,
-      inspectedCountry,
-      pinnedCountries: pinnedCountriesOrdered,
-      displayDate,
-      is24Hour,
-      tempUnit,
-      weatherMap,
-      rates: fxState.rates,
-      issPosition,
-      satellites: liveSatellites,
-    }),
-    [
-      entryStage,
-      focusedCountry,
-      inspectedCountry,
-      pinnedCountriesOrdered,
-      displayDate,
-      is24Hour,
-      tempUnit,
-      weatherMap,
-      fxState.rates,
-      issPosition,
-      liveSatellites,
-    ]
-  );
-  voiceContextRef.current = voiceContext;
+  // On-demand context ref (updated in place — avoids re-rendering ContinuousVoiceNarrator every second)
+  voiceContextRef.current = {
+    entryStage,
+    focusedCountry,
+    inspectedCountry,
+    pinnedCountries: pinnedCountriesOrdered,
+    displayDate,
+    is24Hour,
+    tempUnit,
+    weatherMap,
+    rates: fxState.rates,
+    issPosition,
+    satellites: liveSatellites,
+  };
 
   const tabCounts = useMemo(() => {
     const counts: Record<FilterTab, number> = {
@@ -810,8 +812,18 @@ export default function App() {
 
   // Menu (☰) Quick Navigation Handlers
   const handleNavigateMenu = useCallback(
-    (target: 'globe' | 'crypto' | 'cables' | 'satellites' | 'football') => {
+    (target: 'globe' | 'crypto' | 'dashboard' | 'cables' | 'satellites' | 'football') => {
       setMenuOpen(false);
+      if (target === 'dashboard') {
+        setActiveSection('dashboard');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        triggerVoicePanel(
+          'vidushanawood User Dashboard',
+          `Opened your vidushanawood User Dashboard. You have ${pinnedIsos.length} pinned countries and ${alarms.filter((a) => a.enabled).length} active world alarms.`
+        );
+        return;
+      }
+
       if (target === 'crypto') {
         setActiveSection('crypto');
         window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -852,7 +864,7 @@ export default function App() {
         handleOpenDetails(focusedCountry, 'football');
       }
     },
-    [focusedCountry, handleOpenDetails, triggerVoicePanel]
+    [alarms, focusedCountry, handleOpenDetails, pinnedIsos.length, triggerVoicePanel]
   );
 
   // Inline Compare Bar handlers
@@ -937,7 +949,7 @@ export default function App() {
               aria-expanded={menuOpen}
               title="Open Navigation Menu (Crypto Live, Globe, Cables, Satellites, Football)"
               className={`inline-flex h-9 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
-                activeSection === 'crypto'
+                activeSection !== 'globe'
                   ? 'border-sky-400/50 bg-sky-500/15 text-sky-700 dark:text-sky-300'
                   : 'border-slate-200/90 bg-white/90 text-slate-800 hover:border-slate-300 hover:bg-white dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-100 dark:hover:bg-white/[0.11]'
               }`}
@@ -1103,23 +1115,34 @@ export default function App() {
               )}
             </button>
 
-            {/* Authenticated Operator Email + Logout Control */}
+            {/* vidushanawood Account User Dashboard + Logout Control */}
             {authSession && (
               <>
                 <span
                   aria-hidden="true"
                   className="mx-0.5 hidden h-5 w-px bg-slate-200 sm:block dark:bg-white/12"
                 />
-                <div
-                  title={`Signed in as ${authSession.email}`}
-                  className="hidden items-center gap-1.5 text-xs text-slate-600 2xl:flex dark:text-slate-300"
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleNavigateMenu(activeSection === 'dashboard' ? 'globe' : 'dashboard')
+                  }
+                  title={`vidushanawood User Dashboard (${authSession.email})`}
+                  className={`inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-semibold transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
+                    activeSection === 'dashboard'
+                      ? 'border-sky-400/50 bg-sky-500/20 text-sky-700 dark:text-sky-200'
+                      : 'border-slate-200/90 bg-white/90 text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-700 dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-200 dark:hover:border-sky-400/40 dark:hover:bg-sky-500/15 dark:hover:text-white'
+                  }`}
                 >
                   <UserCheck
                     className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400"
                     aria-hidden="true"
                   />
-                  <span className="max-w-[165px] truncate font-medium">{authSession.email}</span>
-                </div>
+                  <span className="hidden max-w-[130px] truncate xl:inline">
+                    {authSession.email.split('@')[0]}
+                  </span>
+                  <span className="hidden md:inline xl:hidden">Dashboard</span>
+                </button>
                 <button
                   type="button"
                   onClick={handleLogout}
@@ -1128,7 +1151,7 @@ export default function App() {
                   className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-slate-200/90 bg-white/90 px-2.5 text-xs font-semibold text-slate-700 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-200 dark:hover:border-rose-400/40 dark:hover:bg-rose-500/15 dark:hover:text-rose-200"
                 >
                   <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span className="hidden md:inline">Logout</span>
+                  <span className="hidden 2xl:inline">Logout</span>
                 </button>
               </>
             )}
@@ -1208,8 +1231,36 @@ export default function App() {
           <NationalAnthemBar controller={anthemController} variant="dashboard" />
         )}
 
-        {/* Dedicated Crypto Live View (switched via ☰ Menu without crowding mobile layout) */}
-        {activeSection === 'crypto' ? (
+        {/* Dedicated User Dashboard or Crypto Live View (switched via Header / ☰ Menu) */}
+        {activeSection === 'dashboard' ? (
+          <UserDashboardSection
+            session={authSession}
+            pinnedCountries={pinnedCountriesOrdered}
+            focusedCountry={focusedCountry}
+            alarms={alarms}
+            hourlyChimeEnabled={hourlyChimeEnabled}
+            displayDate={displayDate}
+            is24Hour={is24Hour}
+            clockView={clockView}
+            tempUnit={tempUnit}
+            isDark={isDark}
+            onBackToGlobe={() => handleNavigateMenu('globe')}
+            onOpenCrypto={() => handleNavigateMenu('crypto')}
+            onOpenCountry={(c) => handleOpenDetails(c, null)}
+            onOpenAlarms={() => setAlarmModalOpen(true)}
+            onOpenJetLag={() => setRouteModalOpen(true)}
+            onOpenCompare={() => setCompareModalOpen(true)}
+            onToggle24Hour={() => setIs24Hour((v) => !v)}
+            onToggleClockView={() =>
+              setClockView((v) => (v === 'digital' ? 'analog' : 'digital'))
+            }
+            onToggleTempUnit={() => setTempUnit((u) => (u === 'C' ? 'F' : 'C'))}
+            onToggleTheme={() => setIsDark((d) => !d)}
+            onToggleHourlyChime={() => setHourlyChimeEnabled((v) => !v)}
+            onSwitchAccount={() => setEntryStage('auth')}
+            onLogout={handleLogout}
+          />
+        ) : activeSection === 'crypto' ? (
           <CryptoLiveSection
             usdToLkrRate={fxState.rates['LKR'] || 296}
             onBackToGlobe={() => handleNavigateMenu('globe')}
@@ -1631,6 +1682,24 @@ export default function App() {
             <div className="mt-4 flex-1 space-y-1.5 overflow-y-auto">
               <button
                 type="button"
+                onClick={() => handleNavigateMenu('dashboard')}
+                className={`flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left text-sm font-semibold transition-colors ${
+                  activeSection === 'dashboard'
+                    ? 'border-sky-400/45 bg-sky-500/18 text-white'
+                    : 'border-white/[0.07] bg-white/[0.03] text-slate-200 hover:border-sky-400/30 hover:bg-white/[0.07]'
+                }`}
+              >
+                <LayoutDashboard className="h-4 w-4 shrink-0 text-emerald-400" aria-hidden="true" />
+                <div className="min-w-0">
+                  <p>User Dashboard</p>
+                  <p className="truncate text-[11px] font-normal text-slate-400">
+                    vidushanawood Account &amp; pins
+                  </p>
+                </div>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => handleNavigateMenu('crypto')}
                 className={`flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left text-sm font-semibold transition-colors ${
                   activeSection === 'crypto'
@@ -1763,7 +1832,7 @@ export default function App() {
         onResetLive={handleResetLive}
       />
 
-      {/* Country Spotlight Modal (Auto-Rotating Dual Character Stage + Bottom Telemetry Dock) */}
+      {/* Full-Screen Responsive Country View (Auto-Rotating Dual Character Stage + Telemetry + Detailed Overview) */}
       <CountryModal
         country={inspectedCountry}
         displayDate={displayDate}
@@ -1783,6 +1852,8 @@ export default function App() {
         onTogglePin={handleTogglePin}
         onFocusOnGlobe={(c) => handleFocusGlobe(c, true)}
         onCopySummary={handleCopyCard}
+        onNarrateCountry={handleNarrateCountry}
+        onReadOverview={handleReadOverview}
       />
 
       {/* Multi-Stop Route, Layover & Jet Lag Calculator Modal */}
@@ -1901,21 +1972,21 @@ export default function App() {
         />
       ) : entryStage === 'auth' ? (
         <AuthGate
-          onBack={() => setEntryStage('landing')}
+          onBack={() => setEntryStage(authSession ? 'dashboard' : 'landing')}
+          backLabel={authSession ? 'Back to Dashboard' : 'Back to Preview'}
           onAuthenticated={handleAuthenticated}
         />
       ) : entryStage === 'booting' ? (
         <CinematicBootScreen
-          operatorEmail={authSession?.email || 'operator@meridian.local'}
+          operatorEmail={authSession?.email || 'operator@vidushanawood.local'}
           onComplete={handleBootComplete}
         />
       ) : (
         dashboardContent
       )}
 
-      {/* Persistent Continuous Non-Stop AI Voice Assistant (automatically silenced while National Anthem plays) */}
+      {/* On-Demand AI Voice Assistant (Zero continuous chattering; yields strictly to National Anthem) */}
       <ContinuousVoiceNarrator
-        context={voiceContext}
         interruptSignal={voiceInterrupt}
         isAnthemPlaying={isAnthemPlaying}
       />

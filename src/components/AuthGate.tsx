@@ -22,12 +22,17 @@ import { HumanVerificationGate } from './HumanVerificationGate';
 
 interface AuthGateProps {
   onBack: () => void;
+  backLabel?: string;
   onAuthenticated: (session: AuthSession) => void;
 }
 
 type AuthTab = 'signin' | 'signup';
 
-export const AuthGate: React.FC<AuthGateProps> = ({ onBack, onAuthenticated }) => {
+export const AuthGate: React.FC<AuthGateProps> = ({
+  onBack,
+  backLabel = 'Back to Preview',
+  onAuthenticated,
+}) => {
   // Default to Create Account if this browser has no saved accounts yet, else Sign In
   const [tab, setTab] = useState<AuthTab>(() =>
     getRegisteredAccountCount() > 0 ? 'signin' : 'signup'
@@ -149,14 +154,14 @@ export const AuthGate: React.FC<AuthGateProps> = ({ onBack, onAuthenticated }) =
             className="inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-semibold text-slate-300 transition-colors hover:bg-white/[0.06] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
           >
             <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-            <span>Back to Preview</span>
+            <span>{backLabel}</span>
           </button>
 
           <div className="flex items-center gap-2 whitespace-nowrap">
             <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-500/20 text-sky-400 ring-1 ring-sky-400/35">
               <Globe2 className="h-3.5 w-3.5" aria-hidden="true" />
             </span>
-            <span className="text-sm font-bold tracking-tight text-white">Meridian</span>
+            <span className="text-sm font-bold tracking-tight text-white">vidushanawood</span>
           </div>
 
           <span className="hidden text-xs text-slate-400 sm:inline">SHA-256 Local Vault</span>
@@ -168,13 +173,16 @@ export const AuthGate: React.FC<AuthGateProps> = ({ onBack, onAuthenticated }) =
         <div className="rounded-3xl border border-white/[0.1] bg-slate-950/80 p-6 shadow-[0_24px_80px_-20px_rgba(14,165,233,0.22)] backdrop-blur-2xl sm:p-8">
           {/* Title */}
           <div className="text-center">
-            <h1 className="text-2xl font-bold tracking-tight text-white [text-wrap:balance]">
-              {tab === 'signin' ? 'Operator Sign In' : 'Create Operator Account'}
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-cyan-300">
+              vidushanawood Account
+            </p>
+            <h1 className="mt-1 text-2xl font-bold tracking-tight text-white [text-wrap:balance]">
+              {tab === 'signin' ? 'Sign In to User Dashboard' : 'Create vidushanawood Account'}
             </h1>
             <p className="mt-1.5 text-xs leading-relaxed text-slate-400 sm:text-sm">
               {tab === 'signin'
-                ? 'Authenticate and pass orbital human verification to enter the dashboard.'
-                : 'Register your local operator profile sealed with Web Crypto SHA-256.'}
+                ? 'Authenticate and pass orbital human verification to enter your Neon World Clock dashboard.'
+                : 'Register your local operator account sealed with Web Crypto SHA-256.'}
             </p>
           </div>
 
