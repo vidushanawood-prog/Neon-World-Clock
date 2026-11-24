@@ -1,17 +1,22 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowRightLeft,
   Cable,
+  Car,
   Check,
   Compass,
   Copy,
   ExternalLink,
+  Globe2,
+  Landmark,
   Languages,
   Lock,
   MapPin,
+  Maximize2,
   Moon,
   Phone,
   Satellite,
+  Shield,
   Star,
   Sun,
   Sunrise,
@@ -28,6 +33,11 @@ import {
   getOverheadSatellitesForCountry,
   type LiveSatellite,
 } from '../services/satellites';
+import {
+  fetchEnrichedCountryProfile,
+  getBaselineCountryProfile,
+  type EnrichedCountryProfile,
+} from '../services/countryProfile';
 import { formatClockForZone, formatPopulation } from '../utils/time';
 import { getDaylightInfo, getSeasonInfo } from '../utils/solar';
 import {
@@ -73,12 +83,41 @@ export const CountryModal: React.FC<CountryModalProps> = ({
   const [amountInput, setAmountInput] = useState<string>('100');
   const [converterDir, setConverterDir] = useState<'to-lkr' | 'from-lkr'>('to-lkr');
   const [copiedLocal, setCopiedLocal] = useState(false);
+  const [enrichedProfile, setEnrichedProfile] = useState<{
+    iso: string;
+    data: EnrichedCountryProfile;
+  } | null>(null);
+  const [failedUrls, setFailedUrls] = useState<Set<string>>(() => new Set());
+
+  const markImageFailed = useCallback((url: string) => {
+    setFailedUrls((prev) => {
+      if (prev.has(url)) return prev;
+      const next = new Set(prev);
+      next.add(url);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     if (!country) return;
     setAmountInput(country.currency === 'LKR' ? '1000' : '100');
     setConverterDir('to-lkr');
     setCopiedLocal(false);
+    setFailedUrls(new Set());
+
+    let cancelled = false;
+    const baseline = getBaselineCountryProfile(country);
+    setEnrichedProfile({ iso: country.iso, data: baseline });
+
+    void fetchEnrichedCountryProfile(country).then((loaded) => {
+      if (!cancelled) {
+        setEnrichedProfile({ iso: country.iso, data: loaded });
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [country]);
 
   useEffect(() => {
@@ -124,7 +163,23 @@ export const CountryModal: React.FC<CountryModalProps> = ({
     [country, satellites]
   );
 
-  if (!country || !clock || !solarData || !connectivity || !culturalProfile || !overheadSats) {
+  const activeProfile = useMemo(() => {
+    if (!country) return null;
+    if (enrichedProfile && enrichedProfile.iso === country.iso) {
+      return enrichedProfile.data;
+    }
+    return getBaselineCountryProfile(country);
+  }, [country, enrichedProfile]);
+
+  if (
+    !country ||
+    !clock ||
+    !solarData ||
+    !connectivity ||
+    !culturalProfile ||
+    !overheadSats ||
+    !activeProfile
+  ) {
     return null;
   }
 
@@ -175,11 +230,20 @@ export const CountryModal: React.FC<CountryModalProps> = ({
   const activeCables =
     connectivity.directCables.length > 0 ? connectivity.directCables : connectivity.transitCables;
 
+  const leaderPortraitValid = Boolean(
+    activeProfile.leader.portraitUrl && !failedUrls.has(activeProfile.leader.portraitUrl)
+  );
+  const coatOfArmsValid = Boolean(
+    activeProfile.coatOfArmsUrl && !failedUrls.has(activeProfile.coatOfArmsUrl)
+  );
+  const flagUrl = `https://flagcdn.com/w160/${country.iso}.png`;
+  const flagValid = !failedUrls.has(flagUrl);
+
   const handleCopy = () => {
     const weatherPart = weather
       ? ` · ${formatTemperature(weather.tempC, tempUnit)} ${weather.label}`
       : '';
-    const summary = `${country.name} (${country.capital}) — ${clock.copyText}${weatherPart} · ${country.currency} · ISPs: ${connectivity.isps.slice(0, 3).join(', ')}`;
+    const summary = `${country.name} (${country.capital}) — ${clock.copyText}${weatherPart} · ${country.currency} · ${activeProfile.leader.title}: ${activeProfile.leader.name} · ISPs: ${connectivity.isps.slice(0, 3).join(', ')}`;
     onCopySummary(country, summary);
     setCopiedLocal(true);
     window.setTimeout(() => setCopiedLocal(false), 1800);
@@ -206,14 +270,21 @@ export const CountryModal: React.FC<CountryModalProps> = ({
           {/* Solid Top Bar Overlay (zero backdrop-filter over WebGL) */}
           <div className="relative z-20 flex items-start justify-between gap-3 px-4 pt-3.5 pb-1 sm:px-6 sm:pt-4">
             <div className="flex min-w-0 items-center gap-3">
-              <img
-                src={`https://flagcdn.com/w160/${country.iso}.png`}
-                alt={`Flag of ${country.name}`}
-                width={48}
-                height={32}
-                referrerPolicy="no-referrer"
-                className="h-8 w-12 shrink-0 rounded-lg object-cover ring-1 ring-white/20"
-              />
+              {flagValid ? (
+                <img
+                  src={flagUrl}
+                  alt={`Flag of ${country.name}`}
+                  width={48}
+                  height={32}
+                  referrerPolicy="no-referrer"
+                  onError={() => markImageFailed(flagUrl)}
+                  className="h-8 w-12 shrink-0 rounded-lg object-cover ring-1 ring-white/20"
+                />
+              ) : (
+                <div className="flex h-8 w-12 shrink-0 items-center justify-center rounded-lg bg-slate-800 text-[11px] font-bold uppercase text-sky-300 ring-1 ring-white/20">
+                  {country.iso}
+                </div>
+              )}
               <div className="min-w-0">
                 <h2
                   id="country-modal-title"
@@ -224,7 +295,7 @@ export const CountryModal: React.FC<CountryModalProps> = ({
                 <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-slate-400">
                   <span className="font-medium text-slate-200">{country.capital}</span>
                   <span aria-hidden="true">·</span>
-                  <span>{culturalProfile.regionTitle}</span>
+                  <span>{activeProfile.subregion}</span>
                   <span aria-hidden="true" className="hidden sm:inline">
                     ·
                   </span>
@@ -350,7 +421,264 @@ export const CountryModal: React.FC<CountryModalProps> = ({
             </div>
           </div>
 
-          {/* 2. Major Internet Service Providers (ISPs) & Submarine Cable Connections */}
+          {/* 2. Country Visual Highlights & Head of State / Government Profile */}
+          <section
+            aria-label="Country visual highlights and national leadership"
+            className="space-y-3.5 border-t border-white/[0.08] pt-5"
+          >
+            {/* Head of State / Government Card */}
+            <div className="flex items-center justify-between gap-3.5 rounded-2xl border border-sky-400/20 bg-slate-900/65 p-3.5 sm:p-4">
+              <div className="flex min-w-0 items-center gap-3.5">
+                {leaderPortraitValid && activeProfile.leader.portraitUrl ? (
+                  <img
+                    src={activeProfile.leader.portraitUrl}
+                    alt={`${activeProfile.leader.name} — ${activeProfile.leader.title}`}
+                    width={64}
+                    height={64}
+                    referrerPolicy="no-referrer"
+                    loading="lazy"
+                    onError={() => markImageFailed(activeProfile.leader.portraitUrl!)}
+                    className="h-14 w-14 shrink-0 rounded-xl bg-slate-950 object-cover object-top ring-1 ring-sky-400/35 sm:h-16 sm:w-16"
+                  />
+                ) : coatOfArmsValid && activeProfile.coatOfArmsUrl ? (
+                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-sky-400/25 bg-slate-950/90 p-2 sm:h-16 sm:w-16">
+                    <img
+                      src={activeProfile.coatOfArmsUrl}
+                      alt={`Coat of arms of ${country.name}`}
+                      referrerPolicy="no-referrer"
+                      loading="lazy"
+                      onError={() => markImageFailed(activeProfile.coatOfArmsUrl!)}
+                      className="max-h-full max-w-full object-contain"
+                    />
+                  </div>
+                ) : (
+                  <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-sky-400/25 bg-gradient-to-br from-sky-500/20 to-indigo-500/20 text-sky-300 sm:h-16 sm:w-16">
+                    <Landmark className="h-6 w-6" aria-hidden="true" />
+                  </div>
+                )}
+
+                <div className="min-w-0">
+                  <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-sky-300">
+                    <Shield className="h-3 w-3" aria-hidden="true" />
+                    <span>Head of State / Government</span>
+                  </p>
+                  <h3 className="mt-0.5 truncate text-base font-bold text-white">
+                    {activeProfile.leader.name}
+                  </h3>
+                  <p className="truncate text-xs font-medium text-amber-300/90">
+                    {activeProfile.leader.title}
+                  </p>
+                  {activeProfile.leader.summary && (
+                    <p className="mt-1 line-clamp-1 text-[11px] text-slate-400">
+                      {activeProfile.leader.summary}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Optional Coat of Arms Emblem when Leader Portrait is shown */}
+              {leaderPortraitValid && coatOfArmsValid && activeProfile.coatOfArmsUrl && (
+                <div
+                  title={`National Emblem of ${country.name}`}
+                  className="hidden h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-slate-950/80 p-1.5 sm:flex"
+                >
+                  <img
+                    src={activeProfile.coatOfArmsUrl}
+                    alt={`Emblem of ${country.name}`}
+                    referrerPolicy="no-referrer"
+                    loading="lazy"
+                    onError={() => markImageFailed(activeProfile.coatOfArmsUrl!)}
+                    className="max-h-full max-w-full object-contain"
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Country Visual Images Gallery (Capital City & National Landmark / Scenic View) */}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {activeProfile.gallery.map((item, idx) => {
+                const hasValidImage = Boolean(item.imageUrl && !failedUrls.has(item.imageUrl));
+                return (
+                  <figure
+                    key={`${country.iso}-${item.label}-${idx}`}
+                    className="group relative h-36 overflow-hidden rounded-2xl border border-white/[0.1] bg-slate-900/75 sm:h-40"
+                  >
+                    {hasValidImage && item.imageUrl ? (
+                      <>
+                        <img
+                          src={item.imageUrl}
+                          alt={item.caption}
+                          referrerPolicy="no-referrer"
+                          loading="lazy"
+                          onError={() => markImageFailed(item.imageUrl!)}
+                          className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.03]"
+                        />
+                        <div
+                          className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#050a16]/95 via-[#050a16]/30 to-transparent"
+                          aria-hidden="true"
+                        />
+                        <figcaption className="absolute inset-x-0 bottom-0 p-3">
+                          <span className="text-[10px] font-semibold uppercase tracking-wider text-sky-300">
+                            {item.label}
+                          </span>
+                          <p className="truncate text-xs font-semibold text-white">
+                            {item.caption}
+                          </p>
+                        </figcaption>
+                      </>
+                    ) : (
+                      <div className="flex h-full w-full flex-col justify-between bg-gradient-to-br from-[#0b1730] via-[#091225] to-[#070e1d] p-3.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-sky-300">
+                            {idx === 0 ? (
+                              <MapPin className="h-3 w-3" aria-hidden="true" />
+                            ) : (
+                              <Landmark className="h-3 w-3" aria-hidden="true" />
+                            )}
+                            {item.label}
+                          </span>
+                          {flagValid && (
+                            <img
+                              src={flagUrl}
+                              alt=""
+                              aria-hidden="true"
+                              referrerPolicy="no-referrer"
+                              className="h-4 w-6 rounded-sm object-cover opacity-75 ring-1 ring-white/15"
+                            />
+                          )}
+                        </div>
+                        <div>
+                          <p className="truncate text-sm font-semibold text-white">
+                            {item.caption}
+                          </p>
+                          <p className="mt-0.5 text-[11px] text-slate-400">
+                            {!activeProfile.isLoaded
+                              ? 'Loading regional imagery…'
+                              : `${country.continent} · ${Math.abs(country.lat).toFixed(1)}°${country.lat >= 0 ? 'N' : 'S'}, ${Math.abs(country.lng).toFixed(1)}°${country.lng >= 0 ? 'E' : 'W'}`}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </figure>
+                );
+              })}
+            </div>
+
+            {activeProfile.countryExtract && (
+              <p className="line-clamp-2 text-xs leading-relaxed text-slate-400">
+                {activeProfile.countryExtract}
+              </p>
+            )}
+          </section>
+
+          {/* 3. Comprehensive Country Intelligence Specs Grid */}
+          <section
+            aria-label="Country key details"
+            className="grid grid-cols-2 gap-x-5 gap-y-4 border-t border-white/[0.08] pt-5 sm:grid-cols-4"
+          >
+            <div>
+              <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                <Globe2 className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
+                <span>Capital &amp; Region</span>
+              </div>
+              <p className="mt-1 truncate text-sm font-semibold text-white">{country.capital}</p>
+              <p className="truncate text-[11px] text-slate-500">{activeProfile.subregion}</p>
+            </div>
+
+            <div>
+              <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                <Users className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
+                <span>Population</span>
+              </div>
+              <p className="tabular-clock mt-1 text-sm font-semibold text-white">
+                {formatPopulation(country.population)}
+              </p>
+              <p className="tabular-clock text-[11px] text-slate-500">
+                {country.population.toLocaleString()}
+              </p>
+            </div>
+
+            <div>
+              <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                <Maximize2 className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
+                <span>Land Area</span>
+              </div>
+              <p className="tabular-clock mt-1 text-sm font-semibold text-white">
+                {activeProfile.areaKm2
+                  ? `${activeProfile.areaKm2.toLocaleString()} km²`
+                  : activeProfile.isLoaded
+                    ? '—'
+                    : 'Loading…'}
+              </p>
+              <p className="text-[11px] text-slate-500">{solarData.season.hemisphere} Hem.</p>
+            </div>
+
+            <div>
+              <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                <Languages className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
+                <span>Languages</span>
+              </div>
+              <p className="mt-1 truncate text-sm font-semibold text-white" title={activeProfile.languages.join(', ')}>
+                {activeProfile.languages.slice(0, 2).join(', ')}
+              </p>
+              <p className="truncate text-[11px] text-slate-500">
+                {activeProfile.languages.length > 2
+                  ? `+${activeProfile.languages.length - 2} more official`
+                  : 'Official language'}
+              </p>
+            </div>
+
+            <div>
+              <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                <Phone className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
+                <span>Calling Code</span>
+              </div>
+              <p className="tabular-clock mt-1 text-sm font-semibold text-white">
+                {country.callingCode}
+              </p>
+              <p className="text-[11px] text-slate-500">International dial</p>
+            </div>
+
+            <div>
+              <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                <Car className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
+                <span>Driving Side</span>
+              </div>
+              <p className="mt-1 text-sm font-semibold text-white">
+                {activeProfile.drivingSide}-hand
+              </p>
+              <p className="text-[11px] text-slate-500">
+                {activeProfile.drivingSide === 'Left' ? 'Keep Left (LHT)' : 'Keep Right (RHT)'}
+              </p>
+            </div>
+
+            <div>
+              <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                <ArrowRightLeft className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
+                <span>Currency</span>
+              </div>
+              <p className="tabular-clock mt-1 text-sm font-semibold text-white">
+                {country.currency} · {country.currencySymbol}
+              </p>
+              <p className="tabular-clock text-[11px] text-slate-500">
+                ≈ {oneUnitToLkr >= 1 ? oneUnitToLkr.toFixed(1) : oneUnitToLkr.toFixed(3)} LKR
+              </p>
+            </div>
+
+            <div>
+              <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                <MapPin className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
+                <span>Coordinates</span>
+              </div>
+              <p className="tabular-clock mt-1 text-sm font-semibold text-white">
+                {Math.abs(country.lat).toFixed(2)}°{country.lat >= 0 ? 'N' : 'S'},{' '}
+                {Math.abs(country.lng).toFixed(2)}°{country.lng >= 0 ? 'E' : 'W'}
+              </p>
+              <p className="truncate text-[11px] text-slate-500">{country.continent}</p>
+            </div>
+          </section>
+
+          {/* 4. Major Internet Service Providers (ISPs) & Submarine Cable Connections */}
           <section
             aria-label="Submarine cables and major ISPs"
             className="border-t border-white/[0.08] pt-5"
@@ -415,7 +743,7 @@ export const CountryModal: React.FC<CountryModalProps> = ({
             </div>
           </section>
 
-          {/* 3. Nearby / Overhead Satellites & ISS Pass Status */}
+          {/* 5. Nearby / Overhead Satellites & ISS Pass Status */}
           <section
             aria-label="Overhead satellites and ISS pass status"
             className="border-t border-white/[0.08] pt-5"
@@ -479,7 +807,7 @@ export const CountryModal: React.FC<CountryModalProps> = ({
             </div>
           </section>
 
-          {/* 4. Currency & Live Exchange Rate (including LKR & USD Converter) */}
+          {/* 6. Currency & Live Exchange Rate (including LKR & USD Converter) */}
           <section
             aria-label="Currency and live exchange rate"
             className="border-t border-white/[0.08] pt-5"
@@ -547,7 +875,7 @@ export const CountryModal: React.FC<CountryModalProps> = ({
             </div>
           </section>
 
-          {/* 5. Season & Solar Daylight Duration Bar */}
+          {/* 7. Season & Solar Daylight Duration Bar */}
           <div className="border-t border-white/[0.08] pt-5">
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
               <div className="flex items-center gap-2">
@@ -582,53 +910,6 @@ export const CountryModal: React.FC<CountryModalProps> = ({
                 Sunset {solarData.daylight.sunsetStr}
                 <Sunset className="h-3.5 w-3.5 text-indigo-300" aria-hidden="true" />
               </span>
-            </div>
-          </div>
-
-          {/* 6. Country Intelligence Specs Grid */}
-          <div className="grid grid-cols-2 gap-x-6 gap-y-4 border-t border-white/[0.08] pt-5 sm:grid-cols-4">
-            <div>
-              <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                <Users className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>Population</span>
-              </div>
-              <p className="tabular-clock mt-1 text-sm font-semibold text-white">
-                {formatPopulation(country.population)}
-              </p>
-              <p className="tabular-clock text-[11px] text-slate-500">
-                {country.population.toLocaleString()}
-              </p>
-            </div>
-
-            <div>
-              <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                <Phone className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>Calling Code</span>
-              </div>
-              <p className="tabular-clock mt-1 text-sm font-semibold text-white">
-                {country.callingCode}
-              </p>
-              <p className="text-[11px] text-slate-500">International dial</p>
-            </div>
-
-            <div>
-              <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                <Languages className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>Official Language</span>
-              </div>
-              <p className="mt-1 text-sm font-semibold text-white">{country.language}</p>
-            </div>
-
-            <div>
-              <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                <MapPin className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>Coordinates</span>
-              </div>
-              <p className="tabular-clock mt-1 text-sm font-semibold text-white">
-                {Math.abs(country.lat).toFixed(2)}°{country.lat >= 0 ? 'N' : 'S'},{' '}
-                {Math.abs(country.lng).toFixed(2)}°{country.lng >= 0 ? 'E' : 'W'}
-              </p>
-              <p className="text-[11px] text-slate-500">{country.capital}</p>
             </div>
           </div>
         </div>
