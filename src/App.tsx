@@ -2,17 +2,22 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowUpDown,
   Bell,
+  Cable,
   CalendarClock,
   Check,
   Clock,
+  Coins,
   Globe2,
   LogOut,
+  Menu,
   Moon,
+  Orbit,
   Plane,
   RotateCcw,
   Search,
   Star,
   Sun,
+  Trophy,
   UserCheck,
   X,
 } from 'lucide-react';
@@ -55,6 +60,11 @@ import {
   ContinuousVoiceNarrator,
   type VoiceInterruptSignal,
 } from './components/ContinuousVoiceNarrator';
+import { CryptoLiveSection } from './components/CryptoLiveSection';
+import {
+  NationalAnthemBar,
+  useNationalAnthem,
+} from './components/NationalAnthemBar';
 import {
   buildCountryLines,
   buildPanelLines,
@@ -244,9 +254,17 @@ export default function App() {
     };
   });
 
-  // Copy feedback, Toast & Continuous AI Voice Narrator Interrupt Signal
+  // Copy feedback, Toast, Navigation Menu, Dedicated View & Continuous Voice / Anthem Coordination
   const [copiedIso, setCopiedIso] = useState<string | null>(null);
   const [toast, setToast] = useState<{ id: number; title: string; detail?: string } | null>(null);
+  const [menuOpen, setMenuOpen] = useState<boolean>(false);
+  const [activeSection, setActiveSection] = useState<'globe' | 'crypto'>('globe');
+  const [globeLayerCommand, setGlobeLayerCommand] = useState<{
+    id: number;
+    target: 'cables' | 'satellites';
+  } | null>(null);
+  const [modalScrollTarget, setModalScrollTarget] = useState<'football' | null>(null);
+  const [isAnthemPlaying, setIsAnthemPlaying] = useState<boolean>(false);
   const [voiceInterrupt, setVoiceInterrupt] = useState<VoiceInterruptSignal | null>(null);
   const voiceInterruptSeqRef = useRef<number>(1);
   const voiceContextRef = useRef<VoiceNarratorContext | null>(null);
@@ -254,6 +272,9 @@ export default function App() {
   const copyTimerRef = useRef<number | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const globeSectionRef = useRef<HTMLDivElement | null>(null);
+
+  // Singleton National Anthem player coordinated with AI Voice Assistant
+  const anthemController = useNationalAnthem(setIsAnthemPlaying);
 
   const triggerVoiceLines = useCallback((lines: VoiceInterruptSignal['lines']) => {
     if (lines.length === 0) return;
@@ -518,9 +539,12 @@ export default function App() {
 
   const handleFocusGlobe = useCallback(
     (country: Country, scrollToGlobe = true) => {
+      setActiveSection('globe');
       setFocusedIso(country.iso);
       setGlobeCollapsed(false);
-      // Immediately narrate focused country's live time, weather & connectivity
+      // Auto-load & play clicked country's National Anthem (stopping any prior anthem first)
+      anthemController.selectCountryAnthem(country, true);
+      // Queue focused country's live time, weather & connectivity (will wait if anthem plays)
       if (voiceContextRef.current) {
         triggerVoiceLines(buildCountryLines(country, voiceContextRef.current, false));
       }
@@ -530,20 +554,23 @@ export default function App() {
         globeSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
     },
-    [triggerVoiceLines]
+    [anthemController, triggerVoiceLines]
   );
 
   const handleOpenDetails = useCallback(
-    (country: Country) => {
+    (country: Country, scrollTo: 'football' | null = null) => {
       setFocusedIso(country.iso);
+      setModalScrollTarget(scrollTo);
       setInspectedCountry(country);
-      // Immediately narrate full Country Spotlight details
+      // Auto-load & play selected country's National Anthem (stopping any prior anthem first)
+      anthemController.selectCountryAnthem(country, true);
+      // Queue full Country Spotlight details (silenced automatically while anthem plays)
       if (voiceContextRef.current) {
         triggerVoiceLines(buildCountryLines(country, voiceContextRef.current, true));
       }
       fetchWeatherBatch([country]).then((updated) => setWeatherMap(updated));
     },
-    [triggerVoiceLines]
+    [anthemController, triggerVoiceLines]
   );
 
   // Focused country object for 3D Globe
@@ -767,8 +794,11 @@ export default function App() {
   }, [showToast, triggerVoicePanel]);
 
   const handleLogout = useCallback(() => {
+    anthemController.stopAnthem();
     clearActiveSession();
     setAuthSession(null);
+    setMenuOpen(false);
+    setActiveSection('globe');
     setCompareModalOpen(false);
     setInspectedCountry(null);
     setRouteModalOpen(false);
@@ -776,7 +806,54 @@ export default function App() {
     setRingingAlarm(null);
     setEntryStage('landing');
     window.scrollTo({ top: 0, behavior: 'auto' });
-  }, []);
+  }, [anthemController]);
+
+  // Menu (☰) Quick Navigation Handlers
+  const handleNavigateMenu = useCallback(
+    (target: 'globe' | 'crypto' | 'cables' | 'satellites' | 'football') => {
+      setMenuOpen(false);
+      if (target === 'crypto') {
+        setActiveSection('crypto');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        triggerVoicePanel(
+          'Crypto Live Market',
+          'Switched to Crypto Live view showing real-time Bitcoin, Ethereum, Solana, BNB, and top market coins in US Dollars and Sri Lankan Rupees.'
+        );
+        return;
+      }
+
+      setActiveSection('globe');
+
+      if (target === 'globe') {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        triggerVoicePanel(
+          'Globe & World Clocks',
+          'Viewing the interactive 3D Earth Globe and 215 global live clocks.'
+        );
+        return;
+      }
+
+      if (target === 'cables' || target === 'satellites') {
+        setGlobeCollapsed(false);
+        setGlobeLayerCommand({ id: Date.now(), target });
+        window.setTimeout(() => {
+          globeSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 60);
+        triggerVoicePanel(
+          target === 'cables' ? 'Submarine Cables & ISPs' : 'Live Satellites',
+          target === 'cables'
+            ? `Highlighting global submarine fiber-optic cables and national internet providers for ${focusedCountry.name}.`
+            : 'Displaying live orbiting satellites and International Space Station telemetry on the 3D globe.'
+        );
+        return;
+      }
+
+      if (target === 'football') {
+        handleOpenDetails(focusedCountry, 'football');
+      }
+    },
+    [focusedCountry, handleOpenDetails, triggerVoicePanel]
+  );
 
   // Inline Compare Bar handlers
   const handleInlineSlider = (mins: number) => {
@@ -850,8 +927,25 @@ export default function App() {
             <span className="tabular-clock">{liveLocalClock.utcOffset}</span>
           </div>
 
-          {/* Right Controls: Analog/Digital, 12H/24H, °C/°F, Compare, Theme */}
+          {/* Right Controls: Menu (☰), Analog/Digital, 12H/24H, °C/°F, Compare, Theme */}
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+            {/* Compact Menu (☰) Navigation Button */}
+            <button
+              type="button"
+              onClick={() => setMenuOpen(true)}
+              aria-label="Open navigation menu"
+              aria-expanded={menuOpen}
+              title="Open Navigation Menu (Crypto Live, Globe, Cables, Satellites, Football)"
+              className={`inline-flex h-9 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
+                activeSection === 'crypto'
+                  ? 'border-sky-400/50 bg-sky-500/15 text-sky-700 dark:text-sky-300'
+                  : 'border-slate-200/90 bg-white/90 text-slate-800 hover:border-slate-300 hover:bg-white dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-100 dark:hover:bg-white/[0.11]'
+              }`}
+            >
+              <Menu className="h-4 w-4 text-sky-600 dark:text-sky-400" aria-hidden="true" />
+              <span className="hidden sm:inline">Menu</span>
+            </button>
+
             {/* Digital / Analog View Toggle */}
             <div
               role="group"
@@ -1109,6 +1203,20 @@ export default function App() {
           </div>
         </section>
 
+        {/* Dashboard National Anthem Player Bar (visible when country clicked outside modal) */}
+        {!inspectedCountry && (
+          <NationalAnthemBar controller={anthemController} variant="dashboard" />
+        )}
+
+        {/* Dedicated Crypto Live View (switched via ☰ Menu without crowding mobile layout) */}
+        {activeSection === 'crypto' ? (
+          <CryptoLiveSection
+            usdToLkrRate={fxState.rates['LKR'] || 296}
+            onBackToGlobe={() => handleNavigateMenu('globe')}
+            onSelectCoinSpeech={triggerVoicePanel}
+          />
+        ) : (
+          <>
         {/* Interactive 3D Rotating Earth Globe Hero (with Cables, ISPs & Live Satellites) */}
         <div ref={globeSectionRef}>
           <EarthGlobe
@@ -1125,8 +1233,9 @@ export default function App() {
             collapsed={globeCollapsed}
             onToggleCollapse={() => setGlobeCollapsed((c) => !c)}
             onSelectCountry={(country) => handleFocusGlobe(country, false)}
-            onInspectCountry={handleOpenDetails}
+            onInspectCountry={(country) => handleOpenDetails(country, null)}
             onLayerEvent={triggerVoicePanel}
+            layerCommand={globeLayerCommand}
           />
         </div>
 
@@ -1469,15 +1578,175 @@ export default function App() {
             )}
           </div>
         )}
+          </>
+        )}
       </main>
 
-      {/* Quiet Footer */}
-      <footer className="relative z-10 border-t border-slate-200/70 py-8 dark:border-white/[0.06]">
-        <div className="mx-auto flex max-w-[1380px] flex-col items-center justify-between gap-2 px-4 text-xs text-slate-500 sm:flex-row sm:px-6 lg:px-8 dark:text-slate-500">
-          <p>Meridian Global Intelligence · Native IANA timezones, Open-Meteo weather &amp; LKR/USD rates</p>
-          <p className="tabular-clock">{COUNTRIES.length} countries indexed</p>
+      {/* Professional Copyright Footer (Generous bottom clearance for floating Voice Narrator bar) */}
+      <footer className="relative z-10 border-t border-slate-200/70 pt-8 pb-24 sm:pb-20 dark:border-white/[0.07] dark:bg-[#050a16]/60">
+        <div className="mx-auto flex max-w-[1380px] flex-col items-center justify-between gap-2 px-4 text-center text-xs text-slate-600 sm:flex-row sm:px-6 sm:text-left lg:px-8 dark:text-slate-400">
+          <p className="font-medium text-slate-800 dark:text-slate-200">
+            © 2026 Vidusha Nawood · Neon World Clock. All rights reserved.
+          </p>
+          <p className="tabular-clock text-slate-500 dark:text-slate-500">
+            {COUNTRIES.length} countries indexed · Live IANA time, Crypto, Cables &amp; Satellites
+          </p>
         </div>
       </footer>
+
+      {/* Mobile-Friendly Slide-Over Navigation Drawer (Menu ☰) */}
+      {menuOpen && (
+        <div
+          className="fixed inset-0 z-50 flex justify-end"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Quick Navigation Menu"
+        >
+          <div
+            className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs"
+            onClick={() => setMenuOpen(false)}
+            aria-hidden="true"
+          />
+          <nav className="relative z-10 flex h-full w-full max-w-xs flex-col border-l border-sky-400/20 bg-[#070f21] p-5 text-slate-100 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-white/[0.08] pb-4">
+              <div className="flex items-center gap-2.5">
+                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-sky-500/20 text-sky-400 ring-1 ring-sky-400/30">
+                  <Globe2 className="h-4 w-4" aria-hidden="true" />
+                </span>
+                <div>
+                  <p className="text-sm font-bold text-white">Navigation</p>
+                  <p className="text-[11px] text-slate-400">Neon World Clock</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMenuOpen(false)}
+                aria-label="Close navigation menu"
+                className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/12 bg-white/[0.05] text-slate-300 hover:bg-white/[0.12] hover:text-white"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            <div className="mt-4 flex-1 space-y-1.5 overflow-y-auto">
+              <button
+                type="button"
+                onClick={() => handleNavigateMenu('crypto')}
+                className={`flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left text-sm font-semibold transition-colors ${
+                  activeSection === 'crypto'
+                    ? 'border-sky-400/45 bg-sky-500/18 text-white'
+                    : 'border-white/[0.07] bg-white/[0.03] text-slate-200 hover:border-sky-400/30 hover:bg-white/[0.07]'
+                }`}
+              >
+                <Coins className="h-4 w-4 shrink-0 text-amber-400" aria-hidden="true" />
+                <div className="min-w-0">
+                  <p>Crypto Live</p>
+                  <p className="text-[11px] font-normal text-slate-400">BTC, ETH, SOL in USD &amp; LKR</p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleNavigateMenu('globe')}
+                className={`flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left text-sm font-semibold transition-colors ${
+                  activeSection === 'globe'
+                    ? 'border-sky-400/45 bg-sky-500/18 text-white'
+                    : 'border-white/[0.07] bg-white/[0.03] text-slate-200 hover:border-sky-400/30 hover:bg-white/[0.07]'
+                }`}
+              >
+                <Globe2 className="h-4 w-4 shrink-0 text-sky-400" aria-hidden="true" />
+                <div className="min-w-0">
+                  <p>Globe &amp; Clocks</p>
+                  <p className="text-[11px] font-normal text-slate-400">3D Earth &amp; {COUNTRIES.length} regions</p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleNavigateMenu('cables')}
+                className="flex w-full items-center gap-3 rounded-xl border border-white/[0.07] bg-white/[0.03] px-3.5 py-3 text-left text-sm font-semibold text-slate-200 transition-colors hover:border-cyan-400/35 hover:bg-white/[0.07]"
+              >
+                <Cable className="h-4 w-4 shrink-0 text-cyan-400" aria-hidden="true" />
+                <div className="min-w-0">
+                  <p>Submarine Cables</p>
+                  <p className="text-[11px] font-normal text-slate-400">Undersea fiber &amp; country ISPs</p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleNavigateMenu('satellites')}
+                className="flex w-full items-center gap-3 rounded-xl border border-white/[0.07] bg-white/[0.03] px-3.5 py-3 text-left text-sm font-semibold text-slate-200 transition-colors hover:border-emerald-400/35 hover:bg-white/[0.07]"
+              >
+                <Orbit className="h-4 w-4 shrink-0 text-emerald-400" aria-hidden="true" />
+                <div className="min-w-0">
+                  <p>Live Satellites</p>
+                  <p className="text-[11px] font-normal text-slate-400">ISS &amp; orbital fleet tracker</p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleNavigateMenu('football')}
+                className="flex w-full items-center gap-3 rounded-xl border border-white/[0.07] bg-white/[0.03] px-3.5 py-3 text-left text-sm font-semibold text-slate-200 transition-colors hover:border-amber-400/35 hover:bg-white/[0.07]"
+              >
+                <Trophy className="h-4 w-4 shrink-0 text-amber-400" aria-hidden="true" />
+                <div className="min-w-0">
+                  <p>Country Football</p>
+                  <p className="truncate text-[11px] font-normal text-slate-400">
+                    {focusedCountry.name} national team
+                  </p>
+                </div>
+              </button>
+
+              <div className="border-t border-white/[0.08] pt-3">
+                <p className="px-1 pb-2 text-[11px] font-semibold text-slate-400">
+                  Quick Tools
+                </p>
+                <div className="grid grid-cols-3 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setRouteModalOpen(true);
+                    }}
+                    className="flex flex-col items-center gap-1 rounded-xl border border-white/[0.08] bg-white/[0.03] py-2.5 text-[11px] font-medium text-slate-200 hover:bg-white/[0.08]"
+                  >
+                    <Plane className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
+                    <span>Jet Lag</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setAlarmModalOpen(true);
+                    }}
+                    className="flex flex-col items-center gap-1 rounded-xl border border-white/[0.08] bg-white/[0.03] py-2.5 text-[11px] font-medium text-slate-200 hover:bg-white/[0.08]"
+                  >
+                    <Bell className="h-3.5 w-3.5 text-amber-400" aria-hidden="true" />
+                    <span>Alarms</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setCompareModalOpen(true);
+                    }}
+                    className="flex flex-col items-center gap-1 rounded-xl border border-white/[0.08] bg-white/[0.03] py-2.5 text-[11px] font-medium text-slate-200 hover:bg-white/[0.08]"
+                  >
+                    <CalendarClock className="h-3.5 w-3.5 text-cyan-400" aria-hidden="true" />
+                    <span>Compare</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <p className="mt-4 border-t border-white/[0.08] pt-3 text-center text-[11px] text-slate-500">
+              © 2026 Vidusha Nawood
+            </p>
+          </nav>
+        </div>
+      )}
 
       {/* Compare Time Modal */}
       <CompareModal
@@ -1505,7 +1774,12 @@ export default function App() {
         weather={inspectedCountry ? weatherMap[inspectedCountry.iso] : undefined}
         rates={fxState.rates}
         ratesAreLive={fxState.isLive}
-        onClose={() => setInspectedCountry(null)}
+        anthemController={anthemController}
+        scrollTarget={modalScrollTarget}
+        onClose={() => {
+          setInspectedCountry(null);
+          setModalScrollTarget(null);
+        }}
         onTogglePin={handleTogglePin}
         onFocusOnGlobe={(c) => handleFocusGlobe(c, true)}
         onCopySummary={handleCopyCard}
@@ -1639,10 +1913,11 @@ export default function App() {
         dashboardContent
       )}
 
-      {/* Persistent Continuous Non-Stop AI Voice Assistant (never unmounts across stages) */}
+      {/* Persistent Continuous Non-Stop AI Voice Assistant (automatically silenced while National Anthem plays) */}
       <ContinuousVoiceNarrator
         context={voiceContext}
         interruptSignal={voiceInterrupt}
+        isAnthemPlaying={isAnthemPlaying}
       />
     </>
   );

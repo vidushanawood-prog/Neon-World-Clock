@@ -14,6 +14,7 @@ export interface VoiceInterruptSignal {
 interface ContinuousVoiceNarratorProps {
   context: VoiceNarratorContext;
   interruptSignal: VoiceInterruptSignal | null;
+  isAnthemPlaying: boolean;
 }
 
 function selectPreferredVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
@@ -42,6 +43,7 @@ function selectPreferredVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVo
 export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = ({
   context,
   interruptSignal,
+  isAnthemPlaying,
 }) => {
   const isSupported = typeof window !== 'undefined' && 'speechSynthesis' in window;
 
@@ -52,9 +54,12 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
     text: 'Tap anywhere to start continuous live global voice narration.',
   });
 
-  // Always-fresh ref snapshot of live telemetry so continuous loop reads current values
+  // Always-fresh ref snapshots of live telemetry & anthem state
   const contextRef = useRef<VoiceNarratorContext>(context);
   contextRef.current = context;
+  const isAnthemPlayingRef = useRef<boolean>(isAnthemPlaying);
+  isAnthemPlayingRef.current = isAnthemPlaying;
+  const prevAnthemPlayingRef = useRef<boolean>(isAnthemPlaying);
 
   const unlockedRef = useRef<boolean>(false);
   const gestureReceivedRef = useRef<boolean>(false);
@@ -96,6 +101,13 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
   const speakLine = useCallback(
     (line: NarrationLine) => {
       if (!isSupported) return;
+      // Never talk over an actively playing National Anthem
+      if (isAnthemPlayingRef.current) {
+        queueRef.current.unshift(line);
+        setIsSpeaking(false);
+        return;
+      }
+
       const synth = window.speechSynthesis;
       clearPendingTimer();
 
@@ -124,7 +136,14 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
       utteranceRef.current = utterance;
 
       utterance.onstart = () => {
-        if (speakTokenRef.current !== token) return;
+        if (speakTokenRef.current !== token || isAnthemPlayingRef.current) {
+          try {
+            synth.cancel();
+          } catch {
+            // Ignore
+          }
+          return;
+        }
         unlockedRef.current = true;
         setIsUnlocked(true);
         setIsSpeaking(true);
@@ -136,8 +155,9 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
         setIsSpeaking(false);
         lastAdvanceAtRef.current = Date.now();
         clearPendingTimer();
+        if (isAnthemPlayingRef.current) return;
         nextTimerRef.current = window.setTimeout(() => {
-          if (speakTokenRef.current !== token) return;
+          if (speakTokenRef.current !== token || isAnthemPlayingRef.current) return;
           ensureQueuePopulated();
           const next = queueRef.current.shift();
           if (next) speakLine(next);
@@ -153,11 +173,14 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
             unlockedRef.current = false;
             setIsUnlocked(false);
           }
-          // Re-queue this line at the front so it speaks immediately once unlocked
           queueRef.current.unshift(line);
           return;
         }
         if (event.error === 'canceled' || event.error === 'interrupted') {
+          return;
+        }
+        if (isAnthemPlayingRef.current) {
+          setIsSpeaking(false);
           return;
         }
         // Recover automatically on any transient synthesis error
@@ -165,7 +188,7 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
         lastAdvanceAtRef.current = Date.now();
         clearPendingTimer();
         nextTimerRef.current = window.setTimeout(() => {
-          if (speakTokenRef.current !== token) return;
+          if (speakTokenRef.current !== token || isAnthemPlayingRef.current) return;
           ensureQueuePopulated();
           const next = queueRef.current.shift();
           if (next) speakLine(next);
@@ -183,12 +206,51 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
   );
 
   const speakNextFromQueue = useCallback(() => {
+    if (isAnthemPlayingRef.current) return;
     ensureQueuePopulated();
     const next = queueRef.current.shift();
     if (next) {
       speakLine(next);
     }
   }, [ensureQueuePopulated, speakLine]);
+
+  // Strict National Anthem Coordination:
+  // - When isAnthemPlaying becomes true -> immediately cancel speech & stay silent
+  // - When isAnthemPlaying becomes false -> automatically resume continuous narration
+  useEffect(() => {
+    if (!isSupported) return;
+    const wasPlaying = prevAnthemPlayingRef.current;
+    prevAnthemPlayingRef.current = isAnthemPlaying;
+
+    if (isAnthemPlaying) {
+      clearPendingTimer();
+      speakTokenRef.current += 1;
+      try {
+        window.speechSynthesis.cancel();
+      } catch {
+        // Ignore
+      }
+      setIsSpeaking(false);
+      // Preserve the interrupted line at the front of the queue so narration resumes cleanly afterward
+      if (currentLineRef.current && queueRef.current[0]?.text !== currentLineRef.current.text) {
+        queueRef.current.unshift(currentLineRef.current);
+      }
+      return;
+    }
+
+    // Anthem just ended / paused / stopped / errored -> automatically resume voice loop!
+    if (wasPlaying && !isAnthemPlaying) {
+      unlockedRef.current = true;
+      gestureReceivedRef.current = true;
+      setIsUnlocked(true);
+      clearPendingTimer();
+      nextTimerRef.current = window.setTimeout(() => {
+        if (!isAnthemPlayingRef.current) {
+          speakNextFromQueue();
+        }
+      }, 360);
+    }
+  }, [clearPendingTimer, isAnthemPlaying, isSupported, speakNextFromQueue]);
 
   // Load voices & react to voiceschanged
   useEffect(() => {
@@ -222,6 +284,7 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
       gestureReceivedRef.current = true;
       unlockedRef.current = true;
       setIsUnlocked(true);
+      if (isAnthemPlayingRef.current) return;
       const synth = window.speechSynthesis;
       if (!synth.speaking) {
         speakNextFromQueue();
@@ -231,7 +294,7 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
     // Attempt optimistic start right away (if browser allows autoplay, onstart flips unlockedRef=true;
     // if blocked, gestureReceivedRef stays false so the very first click/tap unlocks synchronously)
     const initialTimer = window.setTimeout(() => {
-      if (!unlockedRef.current && !gestureReceivedRef.current) {
+      if (!unlockedRef.current && !gestureReceivedRef.current && !isAnthemPlayingRef.current) {
         speakNextFromQueue();
       }
     }, 450);
@@ -260,6 +323,13 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
     unlockedRef.current = true;
     gestureReceivedRef.current = true;
     setIsUnlocked(true);
+
+    // If a National Anthem is actively playing, hold these lines ready without speaking over it
+    if (isAnthemPlayingRef.current) {
+      setActiveLine(interruptSignal.lines[0]);
+      return;
+    }
+
     speakNextFromQueue();
   }, [interruptSignal, isSupported, speakNextFromQueue]);
 
@@ -268,7 +338,7 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
     if (!isSupported) return;
 
     const watchdog = window.setInterval(() => {
-      if (!unlockedRef.current) return;
+      if (!unlockedRef.current || isAnthemPlayingRef.current) return;
       const synth = window.speechSynthesis;
       const nowMs = Date.now();
 
@@ -307,7 +377,9 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
   const handleReplayCurrent = (e: React.MouseEvent) => {
     e.stopPropagation();
     unlockedRef.current = true;
+    gestureReceivedRef.current = true;
     setIsUnlocked(true);
+    if (isAnthemPlayingRef.current) return;
     if (currentLineRef.current) {
       speakLine(currentLineRef.current);
     } else {
@@ -318,7 +390,9 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
   const handleNextLine = (e: React.MouseEvent) => {
     e.stopPropagation();
     unlockedRef.current = true;
+    gestureReceivedRef.current = true;
     setIsUnlocked(true);
+    if (isAnthemPlayingRef.current) return;
     speakNextFromQueue();
   };
 
@@ -330,8 +404,11 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
       onClick={() => {
         if (!unlockedRef.current) {
           unlockedRef.current = true;
+          gestureReceivedRef.current = true;
           setIsUnlocked(true);
-          speakNextFromQueue();
+          if (!isAnthemPlayingRef.current) {
+            speakNextFromQueue();
+          }
         }
       }}
       className="fixed bottom-4 left-4 z-40 flex max-w-[calc(100vw-2rem)] items-center gap-2.5 rounded-2xl border border-sky-400/30 bg-[#071022]/95 px-3 py-2 text-slate-100 shadow-[0_12px_36px_-10px_rgba(14,165,233,0.45)] sm:max-w-[430px] sm:gap-3 sm:px-3.5 sm:py-2.5"
@@ -339,9 +416,11 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
       {/* Active Voice Icon */}
       <div
         className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors ${
-          isSpeaking
-            ? 'border-cyan-400/50 bg-cyan-500/18 text-cyan-300'
-            : 'border-sky-400/30 bg-sky-500/12 text-sky-300'
+          isAnthemPlaying
+            ? 'border-amber-400/45 bg-amber-400/15 text-amber-300'
+            : isSpeaking
+              ? 'border-cyan-400/50 bg-cyan-500/18 text-cyan-300'
+              : 'border-sky-400/30 bg-sky-500/12 text-sky-300'
         }`}
       >
         <Volume2 className="h-4 w-4" aria-hidden="true" />
@@ -354,15 +433,23 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
           <span aria-hidden="true" className="text-slate-600">
             ·
           </span>
-          <span className="shrink-0 text-slate-400">
-            {isUnlocked ? (isSpeaking ? 'Speaking' : 'Continuous') : 'Tap to Start'}
+          <span className={`shrink-0 ${isAnthemPlaying ? 'text-amber-300' : 'text-slate-400'}`}>
+            {isAnthemPlaying
+              ? 'Paused for Anthem'
+              : isUnlocked
+                ? isSpeaking
+                  ? 'Speaking'
+                  : 'Continuous'
+                : 'Tap to Start'}
           </span>
         </div>
         <p
           className="mt-0.5 truncate text-xs text-slate-200"
           title={activeLine.text}
         >
-          {activeLine.text}
+          {isAnthemPlaying
+            ? 'Silent while National Anthem plays — resumes automatically when finished.'
+            : activeLine.text}
         </p>
       </div>
 
@@ -371,18 +458,20 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
         <button
           type="button"
           onClick={handleReplayCurrent}
+          disabled={isAnthemPlaying}
           aria-label="Replay current narration line"
-          title="Replay current line"
-          className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/12 bg-white/[0.05] text-slate-200 transition-colors hover:border-sky-400/40 hover:bg-sky-500/15 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+          title={isAnthemPlaying ? 'Resumes after anthem finishes' : 'Replay current line'}
+          className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/12 bg-white/[0.05] text-slate-200 transition-colors hover:border-sky-400/40 hover:bg-sky-500/15 hover:text-white disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
         >
           <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
         <button
           type="button"
           onClick={handleNextLine}
+          disabled={isAnthemPlaying}
           aria-label="Next narration line"
-          title="Next narration line"
-          className="inline-flex h-8 items-center gap-1 rounded-xl border border-sky-400/35 bg-sky-500/18 px-2.5 text-[11px] font-semibold text-sky-200 transition-colors hover:bg-sky-500/28 hover:text-white whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+          title={isAnthemPlaying ? 'Resumes after anthem finishes' : 'Next narration line'}
+          className="inline-flex h-8 items-center gap-1 rounded-xl border border-sky-400/35 bg-sky-500/18 px-2.5 text-[11px] font-semibold text-sky-200 transition-colors hover:bg-sky-500/28 hover:text-white whitespace-nowrap disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
         >
           <span className="hidden sm:inline">Next</span>
           <SkipForward className="h-3.5 w-3.5" aria-hidden="true" />

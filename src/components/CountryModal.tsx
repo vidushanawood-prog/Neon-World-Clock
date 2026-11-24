@@ -1,12 +1,14 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRightLeft,
+  Briefcase,
   Cable,
   Car,
   Check,
   Compass,
   Copy,
   ExternalLink,
+  Factory,
   Globe2,
   Landmark,
   Languages,
@@ -14,6 +16,7 @@ import {
   MapPin,
   Maximize2,
   Moon,
+  Package,
   Phone,
   Satellite,
   Shield,
@@ -21,6 +24,7 @@ import {
   Sun,
   Sunrise,
   Sunset,
+  Trophy,
   Users,
   Wifi,
   Wind,
@@ -29,6 +33,10 @@ import {
 import type { Country } from '../data/countries';
 import { getCountryConnectivity } from '../data/connectivity';
 import { getCulturalProfile } from '../data/culturalProfiles';
+import {
+  getCountryFootballProfile,
+  getCountryTradeProfile,
+} from '../data/tradeAndBrands';
 import {
   getOverheadSatellitesForCountry,
   type LiveSatellite,
@@ -48,6 +56,10 @@ import {
 import { AnalogClock } from './AnalogClock';
 import { WeatherIcon } from './WeatherIcon';
 import { CharacterTurntableStage } from './CharacterTurntableStage';
+import {
+  NationalAnthemBar,
+  type NationalAnthemController,
+} from './NationalAnthemBar';
 
 interface CountryModalProps {
   country: Country | null;
@@ -59,6 +71,8 @@ interface CountryModalProps {
   weather?: WeatherEntry;
   rates: Record<string, number>;
   ratesAreLive: boolean;
+  anthemController: NationalAnthemController;
+  scrollTarget?: 'football' | null;
   onClose: () => void;
   onTogglePin: (iso: string) => void;
   onFocusOnGlobe: (country: Country) => void;
@@ -75,11 +89,14 @@ export const CountryModal: React.FC<CountryModalProps> = ({
   weather,
   rates,
   ratesAreLive,
+  anthemController,
+  scrollTarget,
   onClose,
   onTogglePin,
   onFocusOnGlobe,
   onCopySummary,
 }) => {
+  const footballSectionRef = useRef<HTMLElement | null>(null);
   const [amountInput, setAmountInput] = useState<string>('100');
   const [converterDir, setConverterDir] = useState<'to-lkr' | 'from-lkr'>('to-lkr');
   const [copiedLocal, setCopiedLocal] = useState(false);
@@ -171,6 +188,24 @@ export const CountryModal: React.FC<CountryModalProps> = ({
     return getBaselineCountryProfile(country);
   }, [country, enrichedProfile]);
 
+  const tradeProfile = useMemo(
+    () => (country ? getCountryTradeProfile(country) : null),
+    [country]
+  );
+
+  const footballProfile = useMemo(
+    () => (country ? getCountryFootballProfile(country) : null),
+    [country]
+  );
+
+  useEffect(() => {
+    if (!country || scrollTarget !== 'football') return;
+    const t = window.setTimeout(() => {
+      footballSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 180);
+    return () => window.clearTimeout(t);
+  }, [country, scrollTarget]);
+
   if (
     !country ||
     !clock ||
@@ -178,7 +213,9 @@ export const CountryModal: React.FC<CountryModalProps> = ({
     !connectivity ||
     !culturalProfile ||
     !overheadSats ||
-    !activeProfile
+    !activeProfile ||
+    !tradeProfile ||
+    !footballProfile
   ) {
     return null;
   }
@@ -420,6 +457,9 @@ export const CountryModal: React.FC<CountryModalProps> = ({
               )}
             </div>
           </div>
+
+          {/* 1B. National Anthem Auto-Play Control Bar */}
+          <NationalAnthemBar controller={anthemController} variant="modal" />
 
           {/* 2. Country Visual Highlights & Head of State / Government Profile */}
           <section
@@ -675,6 +715,99 @@ export const CountryModal: React.FC<CountryModalProps> = ({
                 {Math.abs(country.lng).toFixed(2)}°{country.lng >= 0 ? 'E' : 'W'}
               </p>
               <p className="truncate text-[11px] text-slate-500">{country.continent}</p>
+            </div>
+          </section>
+
+          {/* 3B. Trade, Exports & Famous Brands Card (All 215 Countries & Territories) */}
+          <section
+            aria-label={`Trade, exports, and famous brands of ${country.name}`}
+            className="border-t border-white/[0.08] pt-5"
+          >
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-white">
+                <Briefcase className="h-4 w-4 text-sky-400" aria-hidden="true" />
+                <span>Trade, Exports &amp; Famous Brands</span>
+              </h3>
+              <span className="text-xs text-slate-400">{country.name} Economy</span>
+            </div>
+
+            <p className="mt-1.5 text-xs text-slate-400">{tradeProfile.tradeHighlight}</p>
+
+            <div className="mt-3.5 grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+              {/* Top Exports & Imports */}
+              <div className="rounded-2xl border border-white/[0.08] bg-slate-900/60 p-4 space-y-3">
+                <div>
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-300">
+                    <Package className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Top Exports</span>
+                  </div>
+                  <p className="mt-1.5 text-xs leading-relaxed text-slate-200">
+                    {tradeProfile.topExports.join(' · ')}
+                  </p>
+                </div>
+                <div className="border-t border-white/[0.06] pt-2.5">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-300">
+                    <ArrowRightLeft className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Key Imports</span>
+                  </div>
+                  <p className="mt-1.5 text-xs leading-relaxed text-slate-300">
+                    {tradeProfile.topImports.join(' · ')}
+                  </p>
+                </div>
+              </div>
+
+              {/* Core Industries & Famous National / Global Brands */}
+              <div className="rounded-2xl border border-white/[0.08] bg-slate-900/60 p-4 space-y-3">
+                <div>
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-cyan-300">
+                    <Factory className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Core Industries</span>
+                  </div>
+                  <p className="mt-1.5 text-xs leading-relaxed text-slate-200">
+                    {tradeProfile.coreIndustries.join(' · ')}
+                  </p>
+                </div>
+                <div className="border-t border-white/[0.06] pt-2.5">
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-sky-300">
+                    <Star className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Famous National &amp; Global Brands</span>
+                  </div>
+                  <p className="mt-1.5 text-xs font-medium leading-relaxed text-white">
+                    {tradeProfile.famousBrands.join(' · ')}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* 3C. National Football Quick Profile */}
+          <section
+            id="country-football-section"
+            ref={footballSectionRef}
+            aria-label={`National Football profile of ${country.name}`}
+            className="border-t border-white/[0.08] pt-5"
+          >
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-white">
+                <Trophy className="h-4 w-4 text-amber-400" aria-hidden="true" />
+                <span>National Football</span>
+              </h3>
+              <span className="text-xs font-semibold text-amber-300">
+                {footballProfile.confederation}
+              </span>
+            </div>
+
+            <div className="mt-3 rounded-2xl border border-white/[0.08] bg-slate-900/60 p-4">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <p className="text-sm font-bold text-white">{footballProfile.teamName}</p>
+                <span className="text-xs font-medium text-sky-300">
+                  {footballProfile.nickname}
+                </span>
+              </div>
+              <p className="mt-1.5 text-xs text-slate-300">{footballProfile.iconicMoment}</p>
+              <p className="mt-1 text-[11px] text-slate-400">
+                Home Ground: {footballProfile.homeStadium}
+              </p>
             </div>
           </section>
 

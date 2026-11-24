@@ -46,6 +46,7 @@ interface EarthGlobeProps {
   onSelectCountry: (country: Country) => void;
   onInspectCountry: (country: Country) => void;
   onLayerEvent?: (topic: string, text: string) => void;
+  layerCommand?: { id: number; target: 'cables' | 'satellites' } | null;
 }
 
 // High-definition public satellite Earth texture URLs (Three-Globe / NASA Blue Marble)
@@ -285,6 +286,7 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
   onSelectCountry,
   onInspectCountry,
   onLayerEvent,
+  layerCommand,
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const [webglUnavailable, setWebglUnavailable] = useState(false);
@@ -351,6 +353,15 @@ export const EarthGlobe: React.FC<EarthGlobeProps> = ({
       setTrackedSatId(null);
     }
   }, [showSatellitesLayer]);
+
+  useEffect(() => {
+    if (!layerCommand) return;
+    if (layerCommand.target === 'cables') {
+      setShowCablesLayer(true);
+    } else if (layerCommand.target === 'satellites') {
+      setShowSatellitesLayer(true);
+    }
+  }, [layerCommand]);
 
   const handleTrackSatellite = (satId: string) => {
     if (satId !== 'iss' && !showSatellitesLayer) {
