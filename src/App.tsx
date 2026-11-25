@@ -20,6 +20,7 @@ import {
   Sun,
   Trophy,
   UserCheck,
+  UserPlus,
   X,
 } from 'lucide-react';
 import { CONTINENTS, COUNTRIES, DEFAULT_PINNED_ISOS, type Country } from './data/countries';
@@ -898,33 +899,49 @@ export default function App() {
     return Math.min(1425, Math.round(total / 15) * 15);
   }, [compareConfig.timeStr]);
 
+  const handleQuickSearchFocus = useCallback(() => {
+    setActiveSection('globe');
+    window.setTimeout(() => {
+      searchInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      searchInputRef.current?.focus();
+    }, 60);
+  }, []);
+
+  const activeAlarmsCount = alarms.filter((a) => a.enabled).length;
+
   const dashboardContent = (
-    <div className="relative min-h-screen text-slate-900 dark:text-slate-100">
+    <div className="relative min-h-screen w-full overflow-x-hidden text-slate-900 dark:text-slate-100">
       {/* Subtle Cosmic Atmospheric Background */}
       <div className="ambient-canvas" aria-hidden="true" />
 
-      {/* Sticky Top Navigation Bar (Single-row, 64px height, zero horizontal overflow) */}
-      <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/80 backdrop-blur-xl dark:border-white/[0.07] dark:bg-slate-950/80">
-        <div className="mx-auto flex h-16 max-w-[1380px] items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
+      {/* Clean, Minimal Sticky Top Header (Zero crowding on 360px phones through wide desktops) */}
+      <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/85 backdrop-blur-xl dark:border-white/[0.07] dark:bg-slate-950/85">
+        <div className="mx-auto flex h-16 max-w-[1380px] items-center justify-between gap-3 px-3.5 sm:px-6 lg:px-8">
           {/* Brand Wordmark */}
           <a
             href="#top"
             onClick={(e) => {
               e.preventDefault();
+              setActiveSection('globe');
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
-            className="flex shrink-0 items-center gap-2.5 whitespace-nowrap rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+            className="flex min-w-0 items-center gap-2.5 whitespace-nowrap rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
           >
-            <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-sky-600 text-white shadow-sm dark:bg-sky-500/20 dark:text-sky-400 dark:ring-1 dark:ring-sky-400/30">
-              <Globe2 className="h-4 w-4" aria-hidden="true" />
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-sky-600 text-white shadow-sm dark:bg-sky-500/20 dark:text-sky-400 dark:ring-1 dark:ring-sky-400/35">
+              <Globe2 className="h-4.5 w-4.5" aria-hidden="true" />
             </span>
-            <span className="text-lg font-bold tracking-tight text-slate-950 dark:text-white">
-              Meridian
-            </span>
+            <div className="min-w-0 leading-tight">
+              <span className="block truncate text-base font-bold tracking-tight text-slate-950 sm:text-lg dark:text-white">
+                Neon World Clock
+              </span>
+              <span className="hidden text-[11px] font-medium text-slate-500 sm:block dark:text-slate-400">
+                Meridian · {COUNTRIES.length} Regions
+              </span>
+            </div>
           </a>
 
-          {/* Center Local Readout (XL Desktop) */}
-          <div className="hidden items-center gap-2 text-xs text-slate-500 xl:flex dark:text-slate-400 whitespace-nowrap">
+          {/* Center Quiet Live Local Clock (Tablet & Desktop) */}
+          <div className="hidden items-center gap-2 text-xs text-slate-500 md:flex dark:text-slate-400 whitespace-nowrap">
             <span>Local</span>
             <span aria-hidden="true" className="text-slate-300 dark:text-slate-600">
               ·
@@ -939,228 +956,46 @@ export default function App() {
             <span className="tabular-clock">{liveLocalClock.utcOffset}</span>
           </div>
 
-          {/* Right Controls: Menu (☰), Analog/Digital, 12H/24H, °C/°F, Compare, Theme */}
-          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
-            {/* Compact Menu (☰) Navigation Button */}
+          {/* Right Minimal Actions: Quick Country Search + Menu (☰) Drawer Trigger */}
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={handleQuickSearchFocus}
+              aria-label="Search countries"
+              title="Search 215 countries & capitals"
+              className="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200/90 bg-white/90 px-3 text-xs font-semibold text-slate-700 transition-colors hover:border-sky-300 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-200 dark:hover:border-sky-400/40 dark:hover:bg-white/[0.11] dark:hover:text-white"
+            >
+              <Search className="h-4 w-4 text-sky-600 dark:text-sky-400" aria-hidden="true" />
+              <span className="hidden sm:inline">Search</span>
+            </button>
+
             <button
               type="button"
               onClick={() => setMenuOpen(true)}
-              aria-label="Open navigation menu"
+              aria-label="Open navigation and controls menu"
               aria-expanded={menuOpen}
-              title="Open Navigation Menu (Crypto Live, Globe, Cables, Satellites, Football)"
-              className={`inline-flex h-9 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
-                activeSection !== 'globe'
-                  ? 'border-sky-400/50 bg-sky-500/15 text-sky-700 dark:text-sky-300'
-                  : 'border-slate-200/90 bg-white/90 text-slate-800 hover:border-slate-300 hover:bg-white dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-100 dark:hover:bg-white/[0.11]'
+              title="Open Menu: Display toggles, Tools, Crypto, Cables, Satellites, Football & vidushanawood Account"
+              className={`relative inline-flex h-10 items-center gap-2 rounded-xl border px-3.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
+                activeSection !== 'globe' || compareConfig.active || activeAlarmsCount > 0
+                  ? 'border-sky-400/50 bg-sky-500/15 text-sky-800 dark:text-sky-200'
+                  : 'border-slate-200/90 bg-white/90 text-slate-800 hover:border-slate-300 hover:bg-white dark:border-white/14 dark:bg-white/[0.07] dark:text-slate-100 dark:hover:bg-white/[0.12]'
               }`}
             >
               <Menu className="h-4 w-4 text-sky-600 dark:text-sky-400" aria-hidden="true" />
-              <span className="hidden sm:inline">Menu</span>
-            </button>
-
-            {/* Digital / Analog View Toggle */}
-            <div
-              role="group"
-              aria-label="Clock display mode"
-              className="flex items-center rounded-xl border border-slate-200/90 bg-slate-100/80 p-0.5 dark:border-white/10 dark:bg-slate-900/80"
-            >
-              <button
-                type="button"
-                onClick={() => setClockView('digital')}
-                aria-pressed={clockView === 'digital'}
-                className={`rounded-[9px] px-2 py-1.5 text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 sm:px-2.5 sm:text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
-                  clockView === 'digital'
-                    ? 'bg-white text-slate-950 shadow-xs dark:bg-slate-800 dark:text-white'
-                    : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
-                }`}
-              >
-                Digital
-              </button>
-              <button
-                type="button"
-                onClick={() => setClockView('analog')}
-                aria-pressed={clockView === 'analog'}
-                className={`rounded-[9px] px-2 py-1.5 text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 sm:px-2.5 sm:text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
-                  clockView === 'analog'
-                    ? 'bg-white text-slate-950 shadow-xs dark:bg-slate-800 dark:text-white'
-                    : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
-                }`}
-              >
-                Analog
-              </button>
-            </div>
-
-            {/* 12H / 24H Toggle */}
-            <div
-              role="group"
-              aria-label="Time format"
-              className="hidden items-center rounded-xl border border-slate-200/90 bg-slate-100/80 p-0.5 sm:flex dark:border-white/10 dark:bg-slate-900/80"
-            >
-              <button
-                type="button"
-                onClick={() => setIs24Hour(false)}
-                aria-pressed={!is24Hour}
-                className={`rounded-[9px] px-2 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
-                  !is24Hour
-                    ? 'bg-white text-slate-950 shadow-xs dark:bg-slate-800 dark:text-white'
-                    : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
-                }`}
-              >
-                12H
-              </button>
-              <button
-                type="button"
-                onClick={() => setIs24Hour(true)}
-                aria-pressed={is24Hour}
-                className={`rounded-[9px] px-2 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
-                  is24Hour
-                    ? 'bg-white text-slate-950 shadow-xs dark:bg-slate-800 dark:text-white'
-                    : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200'
-                }`}
-              >
-                24H
-              </button>
-            </div>
-
-            {/* °C / °F Temperature Unit Toggle */}
-            <button
-              type="button"
-              onClick={() => setTempUnit((u) => (u === 'C' ? 'F' : 'C'))}
-              aria-label={`Switch temperature to °${tempUnit === 'C' ? 'F' : 'C'}`}
-              title="Toggle Celsius / Fahrenheit"
-              className="tabular-clock flex h-9 min-w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200/90 bg-white/90 px-2 text-xs font-semibold text-slate-700 transition-colors hover:border-slate-300 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-200 dark:hover:bg-white/[0.11] dark:hover:text-white"
-            >
-              °{tempUnit}
-            </button>
-
-            {/* Flight Route & Jet Lag Calculator Trigger */}
-            <button
-              type="button"
-              onClick={() => {
-                setRouteModalOpen(true);
-                triggerVoicePanel(
-                  'Route & Jet Lag Calculator',
-                  'Opened the multi-stop flight route, layover, and jet lag calculator. Select your origin and destination cities to estimate timezone shifts and recovery guidance.'
-                );
-              }}
-              aria-label="Open Multi-Stop Route & Jet Lag Calculator"
-              title="Route, Layover & Jet Lag Calculator"
-              className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-slate-200/90 bg-white/90 px-2.5 text-xs font-semibold text-slate-800 transition-colors hover:border-slate-300 hover:bg-white whitespace-nowrap shrink-0 lg:px-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-100 dark:hover:bg-white/[0.11]"
-            >
-              <Plane className="h-3.5 w-3.5 text-sky-600 dark:text-sky-400" aria-hidden="true" />
-              <span className="hidden lg:inline">Jet Lag</span>
-            </button>
-
-            {/* World Alarms & Hourly Chime Trigger */}
-            <button
-              type="button"
-              onClick={() => {
-                setAlarmModalOpen(true);
-                triggerVoicePanel(
-                  'World Alarms & Chime',
-                  `Opened World Alarms panel. You currently have ${alarms.filter((a) => a.enabled).length} active alarms scheduled.`
-                );
-              }}
-              aria-label="Open World Alarms & Hourly Chime"
-              title="World Alarms & Hourly Chime"
-              className={`inline-flex h-9 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 lg:px-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
-                alarms.some((a) => a.enabled) || hourlyChimeEnabled
-                  ? 'border-amber-300/90 bg-amber-50/90 text-amber-800 hover:bg-amber-100/80 dark:border-amber-400/35 dark:bg-amber-400/12 dark:text-amber-200 dark:hover:bg-amber-400/20'
-                  : 'border-slate-200/90 bg-white/90 text-slate-800 hover:border-slate-300 hover:bg-white dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-100 dark:hover:bg-white/[0.11]'
-              }`}
-            >
-              <Bell className="h-3.5 w-3.5" aria-hidden="true" />
-              <span className="hidden lg:inline">Alarms</span>
-              {alarms.filter((a) => a.enabled).length > 0 && (
-                <span className="tabular-clock text-[11px] font-bold">
-                  {alarms.filter((a) => a.enabled).length}
-                </span>
-              )}
-            </button>
-
-            {/* Compare Time Button */}
-            <button
-              type="button"
-              onClick={() => {
-                setCompareModalOpen(true);
-                triggerVoicePanel(
-                  'Compare Global Time',
-                  'Opened Time Comparison panel. Pick any reference timezone and hour to preview synchronized local times across all 215 regions.'
-                );
-              }}
-              className={`inline-flex h-9 items-center gap-1.5 rounded-xl px-2.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 lg:px-3.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
-                compareConfig.active
-                  ? 'bg-sky-600 text-white shadow-sm hover:bg-sky-500 dark:bg-sky-500 dark:text-slate-950 dark:hover:bg-sky-400'
-                  : 'border border-slate-200/90 bg-white/90 text-slate-800 hover:border-slate-300 hover:bg-white dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-100 dark:hover:bg-white/[0.11]'
-              }`}
-            >
-              <CalendarClock className="h-3.5 w-3.5" aria-hidden="true" />
-              <span className="hidden lg:inline">
-                {compareConfig.active ? 'Comparing' : 'Compare'}
-              </span>
-            </button>
-
-            {/* Dark / Light Theme Switch */}
-            <button
-              type="button"
-              onClick={() => setIsDark((d) => !d)}
-              aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-              title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200/90 bg-white/90 text-slate-700 transition-colors hover:border-slate-300 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-200 dark:hover:bg-white/[0.11] dark:hover:text-white"
-            >
-              {isDark ? (
-                <Sun className="h-4 w-4 text-amber-300" aria-hidden="true" />
-              ) : (
-                <Moon className="h-4 w-4 text-indigo-600" aria-hidden="true" />
-              )}
-            </button>
-
-            {/* vidushanawood Account User Dashboard + Logout Control */}
-            {authSession && (
-              <>
+              <span>Menu</span>
+              {(activeAlarmsCount > 0 || compareConfig.active) && (
                 <span
                   aria-hidden="true"
-                  className="mx-0.5 hidden h-5 w-px bg-slate-200 sm:block dark:bg-white/12"
+                  className="h-2 w-2 rounded-full bg-amber-400"
                 />
-                <button
-                  type="button"
-                  onClick={() =>
-                    handleNavigateMenu(activeSection === 'dashboard' ? 'globe' : 'dashboard')
-                  }
-                  title={`vidushanawood User Dashboard (${authSession.email})`}
-                  className={`inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-semibold transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
-                    activeSection === 'dashboard'
-                      ? 'border-sky-400/50 bg-sky-500/20 text-sky-700 dark:text-sky-200'
-                      : 'border-slate-200/90 bg-white/90 text-slate-700 hover:border-sky-300 hover:bg-sky-50 hover:text-sky-700 dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-200 dark:hover:border-sky-400/40 dark:hover:bg-sky-500/15 dark:hover:text-white'
-                  }`}
-                >
-                  <UserCheck
-                    className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400"
-                    aria-hidden="true"
-                  />
-                  <span className="hidden max-w-[130px] truncate xl:inline">
-                    {authSession.email.split('@')[0]}
-                  </span>
-                  <span className="hidden md:inline xl:hidden">Dashboard</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleLogout}
-                  aria-label={`Log out ${authSession.email}`}
-                  title={`Log out (${authSession.email})`}
-                  className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-slate-200/90 bg-white/90 px-2.5 text-xs font-semibold text-slate-700 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-200 dark:hover:border-rose-400/40 dark:hover:bg-rose-500/15 dark:hover:text-rose-200"
-                >
-                  <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span className="hidden 2xl:inline">Logout</span>
-                </button>
-              </>
-            )}
+              )}
+            </button>
           </div>
         </div>
       </header>
 
       {/* Main Content Container */}
-      <main id="top" className="relative z-10 mx-auto max-w-[1380px] px-4 pt-7 pb-20 sm:px-6 lg:px-8">
+      <main id="top" className="relative z-10 mx-auto max-w-[1380px] px-3.5 pt-6 pb-20 sm:px-6 lg:px-8">
         {/* Hero Title & Local Time Summary Row */}
         <section className="flex flex-col justify-between gap-4 pb-6 lg:flex-row lg:items-end">
           <div className="max-w-2xl">
@@ -1214,14 +1049,7 @@ export default function App() {
 
             <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
               <span className="hidden sm:inline">{liveLocalClock.fullDate} ·</span>
-              <span className="tabular-clock">{localTz}</span>
-              <button
-                type="button"
-                onClick={() => setIs24Hour((v) => !v)}
-                className="rounded-lg border border-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-700 sm:hidden dark:border-white/10 dark:text-slate-200"
-              >
-                {is24Hour ? '24H' : '12H'}
-              </button>
+              <span className="tabular-clock truncate">{localTz}</span>
             </div>
           </div>
         </section>
@@ -1633,9 +1461,9 @@ export default function App() {
         )}
       </main>
 
-      {/* Professional Copyright Footer (Generous bottom clearance for floating Voice Narrator bar) */}
-      <footer className="relative z-10 border-t border-slate-200/70 pt-8 pb-24 sm:pb-20 dark:border-white/[0.07] dark:bg-[#050a16]/60">
-        <div className="mx-auto flex max-w-[1380px] flex-col items-center justify-between gap-2 px-4 text-center text-xs text-slate-600 sm:flex-row sm:px-6 sm:text-left lg:px-8 dark:text-slate-400">
+      {/* Professional Copyright Footer (Generous bottom clearance for floating On-Demand Voice badge) */}
+      <footer className="relative z-10 border-t border-slate-200/70 pt-8 pb-28 sm:pb-24 dark:border-white/[0.07] dark:bg-[#050a16]/60">
+        <div className="mx-auto flex max-w-[1380px] flex-col items-center justify-between gap-2 px-3.5 text-center text-xs text-slate-600 sm:flex-row sm:px-6 sm:text-left lg:px-8 dark:text-slate-400">
           <p className="font-medium text-slate-800 dark:text-slate-200">
             © 2026 Vidusha Nawood · Neon World Clock. All rights reserved.
           </p>
@@ -1645,174 +1473,389 @@ export default function App() {
         </div>
       </footer>
 
-      {/* Mobile-Friendly Slide-Over Navigation Drawer (Menu ☰) */}
+      {/* Comprehensive Slide-Over Menu (☰) Drawer: Display Toggles, Tools, Sections & vidushanawood Account */}
       {menuOpen && (
         <div
           className="fixed inset-0 z-50 flex justify-end"
           role="dialog"
           aria-modal="true"
-          aria-label="Quick Navigation Menu"
+          aria-label="Navigation, Controls and Account Menu"
         >
           <div
-            className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs"
+            className="fixed inset-0 bg-slate-950/75 backdrop-blur-xs"
             onClick={() => setMenuOpen(false)}
             aria-hidden="true"
           />
-          <nav className="relative z-10 flex h-full w-full max-w-xs flex-col border-l border-sky-400/20 bg-[#070f21] p-5 text-slate-100 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-white/[0.08] pb-4">
+          <nav className="relative z-10 flex h-[100dvh] w-full max-w-sm flex-col border-l border-sky-400/20 bg-[#070f21] text-slate-100 shadow-2xl">
+            {/* Drawer Header */}
+            <div className="flex shrink-0 items-center justify-between border-b border-white/[0.08] px-5 py-4">
               <div className="flex items-center gap-2.5">
-                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-sky-500/20 text-sky-400 ring-1 ring-sky-400/30">
+                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-sky-500/20 text-sky-400 ring-1 ring-sky-400/35">
                   <Globe2 className="h-4 w-4" aria-hidden="true" />
                 </span>
                 <div>
-                  <p className="text-sm font-bold text-white">Navigation</p>
-                  <p className="text-[11px] text-slate-400">Neon World Clock</p>
+                  <p className="text-sm font-bold text-white">Control Menu</p>
+                  <p className="text-[11px] text-slate-400">Neon World Clock · Meridian</p>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setMenuOpen(false)}
                 aria-label="Close navigation menu"
-                className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/12 bg-white/[0.05] text-slate-300 hover:bg-white/[0.12] hover:text-white"
+                className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/12 bg-white/[0.06] text-slate-300 hover:bg-white/[0.14] hover:text-white"
               >
                 <X className="h-4 w-4" aria-hidden="true" />
               </button>
             </div>
 
-            <div className="mt-4 flex-1 space-y-1.5 overflow-y-auto">
-              <button
-                type="button"
-                onClick={() => handleNavigateMenu('dashboard')}
-                className={`flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left text-sm font-semibold transition-colors ${
-                  activeSection === 'dashboard'
-                    ? 'border-sky-400/45 bg-sky-500/18 text-white'
-                    : 'border-white/[0.07] bg-white/[0.03] text-slate-200 hover:border-sky-400/30 hover:bg-white/[0.07]'
-                }`}
-              >
-                <LayoutDashboard className="h-4 w-4 shrink-0 text-emerald-400" aria-hidden="true" />
-                <div className="min-w-0">
-                  <p>User Dashboard</p>
-                  <p className="truncate text-[11px] font-normal text-slate-400">
-                    vidushanawood Account &amp; pins
-                  </p>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleNavigateMenu('crypto')}
-                className={`flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left text-sm font-semibold transition-colors ${
-                  activeSection === 'crypto'
-                    ? 'border-sky-400/45 bg-sky-500/18 text-white'
-                    : 'border-white/[0.07] bg-white/[0.03] text-slate-200 hover:border-sky-400/30 hover:bg-white/[0.07]'
-                }`}
-              >
-                <Coins className="h-4 w-4 shrink-0 text-amber-400" aria-hidden="true" />
-                <div className="min-w-0">
-                  <p>Crypto Live</p>
-                  <p className="text-[11px] font-normal text-slate-400">BTC, ETH, SOL in USD &amp; LKR</p>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleNavigateMenu('globe')}
-                className={`flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left text-sm font-semibold transition-colors ${
-                  activeSection === 'globe'
-                    ? 'border-sky-400/45 bg-sky-500/18 text-white'
-                    : 'border-white/[0.07] bg-white/[0.03] text-slate-200 hover:border-sky-400/30 hover:bg-white/[0.07]'
-                }`}
-              >
-                <Globe2 className="h-4 w-4 shrink-0 text-sky-400" aria-hidden="true" />
-                <div className="min-w-0">
-                  <p>Globe &amp; Clocks</p>
-                  <p className="text-[11px] font-normal text-slate-400">3D Earth &amp; {COUNTRIES.length} regions</p>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleNavigateMenu('cables')}
-                className="flex w-full items-center gap-3 rounded-xl border border-white/[0.07] bg-white/[0.03] px-3.5 py-3 text-left text-sm font-semibold text-slate-200 transition-colors hover:border-cyan-400/35 hover:bg-white/[0.07]"
-              >
-                <Cable className="h-4 w-4 shrink-0 text-cyan-400" aria-hidden="true" />
-                <div className="min-w-0">
-                  <p>Submarine Cables</p>
-                  <p className="text-[11px] font-normal text-slate-400">Undersea fiber &amp; country ISPs</p>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleNavigateMenu('satellites')}
-                className="flex w-full items-center gap-3 rounded-xl border border-white/[0.07] bg-white/[0.03] px-3.5 py-3 text-left text-sm font-semibold text-slate-200 transition-colors hover:border-emerald-400/35 hover:bg-white/[0.07]"
-              >
-                <Orbit className="h-4 w-4 shrink-0 text-emerald-400" aria-hidden="true" />
-                <div className="min-w-0">
-                  <p>Live Satellites</p>
-                  <p className="text-[11px] font-normal text-slate-400">ISS &amp; orbital fleet tracker</p>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleNavigateMenu('football')}
-                className="flex w-full items-center gap-3 rounded-xl border border-white/[0.07] bg-white/[0.03] px-3.5 py-3 text-left text-sm font-semibold text-slate-200 transition-colors hover:border-amber-400/35 hover:bg-white/[0.07]"
-              >
-                <Trophy className="h-4 w-4 shrink-0 text-amber-400" aria-hidden="true" />
-                <div className="min-w-0">
-                  <p>Country Football</p>
-                  <p className="truncate text-[11px] font-normal text-slate-400">
-                    {focusedCountry.name} national team
-                  </p>
-                </div>
-              </button>
-
-              <div className="border-t border-white/[0.08] pt-3">
-                <p className="px-1 pb-2 text-[11px] font-semibold text-slate-400">
-                  Quick Tools
+            {/* Scrollable Drawer Body */}
+            <div className="flex-1 space-y-5 overflow-y-auto px-5 py-4">
+              {/* 1. Time, Clock & Unit Toggles */}
+              <div className="space-y-3 rounded-2xl border border-white/[0.08] bg-slate-950/60 p-3.5">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-sky-300">
+                  Time &amp; Display Controls
                 </p>
-                <div className="grid grid-cols-3 gap-1.5">
+
+                {/* Digital / Analog */}
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-slate-300">Clock Mode</span>
+                  <div
+                    role="group"
+                    aria-label="Clock display mode"
+                    className="grid grid-cols-2 rounded-xl border border-white/10 bg-slate-900 p-0.5"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setClockView('digital')}
+                      aria-pressed={clockView === 'digital'}
+                      className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                        clockView === 'digital'
+                          ? 'bg-sky-500 text-slate-950'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      Digital
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setClockView('analog')}
+                      aria-pressed={clockView === 'analog'}
+                      className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+                        clockView === 'analog'
+                          ? 'bg-sky-500 text-slate-950'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      Analog
+                    </button>
+                  </div>
+                </div>
+
+                {/* 12H / 24H */}
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-slate-300">Time Format</span>
+                  <div
+                    role="group"
+                    aria-label="Time format"
+                    className="grid grid-cols-2 rounded-xl border border-white/10 bg-slate-900 p-0.5"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setIs24Hour(false)}
+                      aria-pressed={!is24Hour}
+                      className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors ${
+                        !is24Hour
+                          ? 'bg-sky-500 text-slate-950'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      12H
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIs24Hour(true)}
+                      aria-pressed={is24Hour}
+                      className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors ${
+                        is24Hour
+                          ? 'bg-sky-500 text-slate-950'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      24H
+                    </button>
+                  </div>
+                </div>
+
+                {/* °C / °F */}
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-slate-300">Temperature</span>
+                  <div
+                    role="group"
+                    aria-label="Temperature unit"
+                    className="grid grid-cols-2 rounded-xl border border-white/10 bg-slate-900 p-0.5"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setTempUnit('C')}
+                      aria-pressed={tempUnit === 'C'}
+                      className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors ${
+                        tempUnit === 'C'
+                          ? 'bg-sky-500 text-slate-950'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      °C
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTempUnit('F')}
+                      aria-pressed={tempUnit === 'F'}
+                      className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors ${
+                        tempUnit === 'F'
+                          ? 'bg-sky-500 text-slate-950'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      °F
+                    </button>
+                  </div>
+                </div>
+
+                {/* Dark / Light Theme */}
+                <div className="flex items-center justify-between gap-2 pt-0.5">
+                  <span className="text-xs font-medium text-slate-300">Theme</span>
                   <button
                     type="button"
-                    onClick={() => {
-                      setMenuOpen(false);
-                      setRouteModalOpen(true);
-                    }}
-                    className="flex flex-col items-center gap-1 rounded-xl border border-white/[0.08] bg-white/[0.03] py-2.5 text-[11px] font-medium text-slate-200 hover:bg-white/[0.08]"
+                    onClick={() => setIsDark((d) => !d)}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-white/12 bg-white/[0.06] px-3 py-1.5 text-xs font-semibold text-slate-100 hover:bg-white/[0.12]"
                   >
-                    <Plane className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
-                    <span>Jet Lag</span>
+                    {isDark ? (
+                      <>
+                        <Sun className="h-3.5 w-3.5 text-amber-300" aria-hidden="true" />
+                        <span>Switch to Light</span>
+                      </>
+                    ) : (
+                      <>
+                        <Moon className="h-3.5 w-3.5 text-sky-300" aria-hidden="true" />
+                        <span>Switch to Neon Dark</span>
+                      </>
+                    )}
                   </button>
+                </div>
+              </div>
+
+              {/* 2. Tools: Alarms, Daylight / Timezone & Jet Lag */}
+              <div className="space-y-2">
+                <p className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                  Alarms, Timezone &amp; Jet Lag Tools
+                </p>
+                <div className="grid grid-cols-3 gap-2">
                   <button
                     type="button"
                     onClick={() => {
                       setMenuOpen(false);
                       setAlarmModalOpen(true);
+                      triggerVoicePanel(
+                        'World Alarms & Chime',
+                        `Opened World Alarms panel. You currently have ${activeAlarmsCount} active alarms scheduled.`
+                      );
                     }}
-                    className="flex flex-col items-center gap-1 rounded-xl border border-white/[0.08] bg-white/[0.03] py-2.5 text-[11px] font-medium text-slate-200 hover:bg-white/[0.08]"
+                    className={`flex flex-col items-center gap-1.5 rounded-xl border py-3 text-xs font-semibold transition-colors ${
+                      activeAlarmsCount > 0 || hourlyChimeEnabled
+                        ? 'border-amber-400/40 bg-amber-400/12 text-amber-200'
+                        : 'border-white/[0.09] bg-white/[0.03] text-slate-200 hover:bg-white/[0.08]'
+                    }`}
                   >
-                    <Bell className="h-3.5 w-3.5 text-amber-400" aria-hidden="true" />
-                    <span>Alarms</span>
+                    <Bell className="h-4 w-4 text-amber-400" aria-hidden="true" />
+                    <span>Alarms{activeAlarmsCount > 0 ? ` (${activeAlarmsCount})` : ''}</span>
                   </button>
+
                   <button
                     type="button"
                     onClick={() => {
                       setMenuOpen(false);
                       setCompareModalOpen(true);
+                      triggerVoicePanel(
+                        'Compare Global Time',
+                        'Opened Timezone and Daylight comparison tool. Pick any reference timezone and hour to preview synchronized local times across all 215 regions.'
+                      );
                     }}
-                    className="flex flex-col items-center gap-1 rounded-xl border border-white/[0.08] bg-white/[0.03] py-2.5 text-[11px] font-medium text-slate-200 hover:bg-white/[0.08]"
+                    className={`flex flex-col items-center gap-1.5 rounded-xl border py-3 text-xs font-semibold transition-colors ${
+                      compareConfig.active
+                        ? 'border-sky-400/45 bg-sky-500/20 text-sky-200'
+                        : 'border-white/[0.09] bg-white/[0.03] text-slate-200 hover:bg-white/[0.08]'
+                    }`}
                   >
-                    <CalendarClock className="h-3.5 w-3.5 text-cyan-400" aria-hidden="true" />
-                    <span>Compare</span>
+                    <CalendarClock className="h-4 w-4 text-cyan-400" aria-hidden="true" />
+                    <span>Timezone</span>
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setRouteModalOpen(true);
+                      triggerVoicePanel(
+                        'Route & Jet Lag Calculator',
+                        'Opened the multi-stop flight route, layover, and jet lag calculator. Select your origin and destination cities to estimate timezone shifts and recovery guidance.'
+                      );
+                    }}
+                    className="flex flex-col items-center gap-1.5 rounded-xl border border-white/[0.09] bg-white/[0.03] py-3 text-xs font-semibold text-slate-200 transition-colors hover:bg-white/[0.08]"
+                  >
+                    <Plane className="h-4 w-4 text-sky-400" aria-hidden="true" />
+                    <span>Jet Lag</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 3. Global Views & Live Modules */}
+              <div className="space-y-1.5">
+                <p className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                  Live Views &amp; Modules
+                </p>
+
+                <button
+                  type="button"
+                  onClick={() => handleNavigateMenu('globe')}
+                  className={`flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left text-sm font-semibold transition-colors ${
+                    activeSection === 'globe'
+                      ? 'border-sky-400/45 bg-sky-500/18 text-white'
+                      : 'border-white/[0.07] bg-white/[0.03] text-slate-200 hover:border-sky-400/30 hover:bg-white/[0.07]'
+                  }`}
+                >
+                  <Globe2 className="h-4 w-4 shrink-0 text-sky-400" aria-hidden="true" />
+                  <div className="min-w-0">
+                    <p>Globe &amp; Clocks</p>
+                    <p className="text-[11px] font-normal text-slate-400">
+                      3D Earth &amp; {COUNTRIES.length} live regions
+                    </p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleNavigateMenu('crypto')}
+                  className={`flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left text-sm font-semibold transition-colors ${
+                    activeSection === 'crypto'
+                      ? 'border-sky-400/45 bg-sky-500/18 text-white'
+                      : 'border-white/[0.07] bg-white/[0.03] text-slate-200 hover:border-sky-400/30 hover:bg-white/[0.07]'
+                  }`}
+                >
+                  <Coins className="h-4 w-4 shrink-0 text-amber-400" aria-hidden="true" />
+                  <div className="min-w-0">
+                    <p>Crypto Live</p>
+                    <p className="text-[11px] font-normal text-slate-400">
+                      BTC, ETH, SOL in USD &amp; LKR
+                    </p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleNavigateMenu('cables')}
+                  className="flex w-full items-center gap-3 rounded-xl border border-white/[0.07] bg-white/[0.03] px-3.5 py-3 text-left text-sm font-semibold text-slate-200 transition-colors hover:border-cyan-400/35 hover:bg-white/[0.07]"
+                >
+                  <Cable className="h-4 w-4 shrink-0 text-cyan-400" aria-hidden="true" />
+                  <div className="min-w-0">
+                    <p>Cables &amp; ISPs</p>
+                    <p className="text-[11px] font-normal text-slate-400">
+                      Submarine fiber &amp; country ISPs
+                    </p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleNavigateMenu('satellites')}
+                  className="flex w-full items-center gap-3 rounded-xl border border-white/[0.07] bg-white/[0.03] px-3.5 py-3 text-left text-sm font-semibold text-slate-200 transition-colors hover:border-emerald-400/35 hover:bg-white/[0.07]"
+                >
+                  <Orbit className="h-4 w-4 shrink-0 text-emerald-400" aria-hidden="true" />
+                  <div className="min-w-0">
+                    <p>Live Satellites</p>
+                    <p className="text-[11px] font-normal text-slate-400">
+                      ISS &amp; orbital fleet tracker
+                    </p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleNavigateMenu('football')}
+                  className="flex w-full items-center gap-3 rounded-xl border border-white/[0.07] bg-white/[0.03] px-3.5 py-3 text-left text-sm font-semibold text-slate-200 transition-colors hover:border-amber-400/35 hover:bg-white/[0.07]"
+                >
+                  <Trophy className="h-4 w-4 shrink-0 text-amber-400" aria-hidden="true" />
+                  <div className="min-w-0">
+                    <p>Football</p>
+                    <p className="truncate text-[11px] font-normal text-slate-400">
+                      {focusedCountry.name} team &amp; players
+                    </p>
+                  </div>
+                </button>
+              </div>
+
+              {/* 4. vidushanawood Account & User Dashboard */}
+              <div className="space-y-2 border-t border-white/[0.08] pt-4">
+                <p className="px-1 text-[11px] font-semibold uppercase tracking-wider text-cyan-300">
+                  vidushanawood Account
+                </p>
+
+                <button
+                  type="button"
+                  onClick={() => handleNavigateMenu('dashboard')}
+                  className={`flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left text-sm font-semibold transition-colors ${
+                    activeSection === 'dashboard'
+                      ? 'border-emerald-400/45 bg-emerald-500/15 text-white'
+                      : 'border-white/[0.08] bg-white/[0.03] text-slate-200 hover:border-emerald-400/35 hover:bg-white/[0.07]'
+                  }`}
+                >
+                  <LayoutDashboard className="h-4 w-4 shrink-0 text-emerald-400" aria-hidden="true" />
+                  <div className="min-w-0 flex-1">
+                    <p>User Dashboard</p>
+                    <p className="truncate text-[11px] font-normal text-slate-400">
+                      {authSession ? authSession.email : 'Manage profile, pins & alerts'}
+                    </p>
+                  </div>
+                </button>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setEntryStage('auth');
+                    }}
+                    className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border border-sky-400/35 bg-sky-500/15 px-3 text-xs font-semibold text-sky-200 transition-colors hover:bg-sky-500/25 hover:text-white"
+                  >
+                    <UserPlus className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Sign In / Up</span>
+                  </button>
+
+                  {authSession ? (
+                    <button
+                      type="button"
+                      onClick={handleLogout}
+                      className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border border-rose-400/35 bg-rose-500/12 px-3 text-xs font-semibold text-rose-200 transition-colors hover:bg-rose-500/22 hover:text-white"
+                    >
+                      <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Sign Out</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleNavigateMenu('dashboard')}
+                      className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border border-white/12 bg-white/[0.05] px-3 text-xs font-semibold text-slate-200 hover:bg-white/[0.1]"
+                    >
+                      <UserCheck className="h-3.5 w-3.5 text-emerald-400" aria-hidden="true" />
+                      <span>Profile</span>
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
 
-            <p className="mt-4 border-t border-white/[0.08] pt-3 text-center text-[11px] text-slate-500">
-              © 2026 Vidusha Nawood
-            </p>
+            <div className="shrink-0 border-t border-white/[0.08] px-5 py-3 text-center text-[11px] text-slate-500">
+              © 2026 Vidusha Nawood · Neon World Clock
+            </div>
           </nav>
         </div>
       )}
@@ -1832,7 +1875,7 @@ export default function App() {
         onResetLive={handleResetLive}
       />
 
-      {/* Full-Screen Responsive Country View (Auto-Rotating Dual Character Stage + Telemetry + Detailed Overview) */}
+      {/* Full-Screen Responsive Country View (Auto-Rotating Dual Character Stage + Telemetry + Football Players + Detailed Overview) */}
       <CountryModal
         country={inspectedCountry}
         displayDate={displayDate}
@@ -1854,6 +1897,7 @@ export default function App() {
         onCopySummary={handleCopyCard}
         onNarrateCountry={handleNarrateCountry}
         onReadOverview={handleReadOverview}
+        onNarrateSection={triggerVoicePanel}
       />
 
       {/* Multi-Stop Route, Layover & Jet Lag Calculator Modal */}
@@ -1989,6 +2033,7 @@ export default function App() {
       <ContinuousVoiceNarrator
         interruptSignal={voiceInterrupt}
         isAnthemPlaying={isAnthemPlaying}
+        elevatedOffset={Boolean(inspectedCountry)}
       />
     </>
   );

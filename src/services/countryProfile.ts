@@ -226,6 +226,45 @@ async function fetchWikiSummary(slug: string): Promise<WikiSummaryResp | null> {
   );
 }
 
+const playerPortraitCache = new Map<string, string | null>();
+
+/**
+ * Resolves verified HTTPS Wikimedia/Wikipedia portrait thumbnails for national football players.
+ * Cached in-memory by wikiSlug to avoid redundant requests.
+ */
+export async function fetchFootballPlayerPortraits(
+  slugs: readonly string[]
+): Promise<Record<string, string>> {
+  const uniqueSlugs = Array.from(new Set(slugs.filter(Boolean)));
+  const result: Record<string, string> = {};
+  const toFetch: string[] = [];
+
+  for (const slug of uniqueSlugs) {
+    if (playerPortraitCache.has(slug)) {
+      const cached = playerPortraitCache.get(slug);
+      if (cached) result[slug] = cached;
+    } else {
+      toFetch.push(slug);
+    }
+  }
+
+  if (toFetch.length > 0) {
+    const responses = await Promise.all(toFetch.map((slug) => fetchWikiSummary(slug)));
+    responses.forEach((resp, idx) => {
+      const slug = toFetch[idx];
+      const thumb = resp?.thumbnail?.source || resp?.originalimage?.source;
+      if (isSafeHttpsUrl(thumb)) {
+        playerPortraitCache.set(slug, thumb);
+        result[slug] = thumb;
+      } else {
+        playerPortraitCache.set(slug, null);
+      }
+    });
+  }
+
+  return result;
+}
+
 /**
  * Returns instant baseline metadata immediately before async enrichment finishes.
  */

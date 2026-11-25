@@ -8,12 +8,21 @@ export interface CountryTradeProfile {
   tradeHighlight: string;
 }
 
+export interface FootballPlayerInfo {
+  name: string;
+  position: string;
+  number: number;
+  club: string;
+  wikiSlug?: string;
+}
+
 export interface CountryFootballProfile {
   teamName: string;
   nickname: string;
   confederation: string;
   homeStadium: string;
   iconicMoment: string;
+  keyPlayers: FootballPlayerInfo[];
 }
 
 const CURATED_TRADE: Record<string, CountryTradeProfile> = {
@@ -455,6 +464,12 @@ const CURATED_FOOTBALL: Record<string, CountryFootballProfile> = {
     confederation: 'AFC · SAFF',
     homeStadium: 'Colombo Racecourse Stadium',
     iconicMoment: '1995 SAFF Gold Cup Champions in Colombo',
+    keyPlayers: [
+      { name: 'Sujan Perera', position: 'Goalkeeper (C)', number: 1, club: 'TC Sports / Sri Lanka', wikiSlug: 'Sujan_Perera' },
+      { name: 'Waseem Razeek', position: 'Forward', number: 9, club: 'Sri Lanka National XI', wikiSlug: 'Waseem_Razeek' },
+      { name: 'Claudio Kammerknecht', position: 'Defender', number: 4, club: 'Dynamo Dresden', wikiSlug: 'Claudio_Kammerknecht' },
+      { name: 'Leon Perera', position: 'Midfielder', number: 8, club: 'Sri Lanka National XI', wikiSlug: 'Leon_Perera_(footballer)' },
+    ],
   },
   jp: {
     teamName: 'Japan National Football Team',
@@ -462,6 +477,12 @@ const CURATED_FOOTBALL: Record<string, CountryFootballProfile> = {
     confederation: 'AFC',
     homeStadium: 'Japan National Stadium, Tokyo',
     iconicMoment: '4× AFC Asian Cup Champions & 2022 World Cup knockout wins over Germany and Spain',
+    keyPlayers: [
+      { name: 'Wataru Endo', position: 'Midfielder (C)', number: 6, club: 'Liverpool FC', wikiSlug: 'Wataru_Endo' },
+      { name: 'Kaoru Mitoma', position: 'Winger', number: 7, club: 'Brighton & Hove Albion', wikiSlug: 'Kaoru_Mitoma' },
+      { name: 'Takefusa Kubo', position: 'Attacking Midfielder', number: 20, club: 'Real Sociedad', wikiSlug: 'Takefusa_Kubo' },
+      { name: 'Takehiro Tomiyasu', position: 'Defender', number: 16, club: 'Arsenal FC', wikiSlug: 'Takehiro_Tomiyasu' },
+    ],
   },
   gb: {
     teamName: 'Home Nations Football (ENG / SCO / WAL / NIR)',
@@ -469,6 +490,12 @@ const CURATED_FOOTBALL: Record<string, CountryFootballProfile> = {
     confederation: 'UEFA',
     homeStadium: 'Wembley · Hampden · Cardiff · Windsor Park',
     iconicMoment: 'Codified the Laws of the Game in 1863 & 1966 World Cup champions (England)',
+    keyPlayers: [
+      { name: 'Harry Kane', position: 'Forward (ENG)', number: 9, club: 'Bayern Munich', wikiSlug: 'Harry_Kane' },
+      { name: 'Jude Bellingham', position: 'Midfielder (ENG)', number: 10, club: 'Real Madrid', wikiSlug: 'Jude_Bellingham' },
+      { name: 'Andy Robertson', position: 'Defender (SCO)', number: 3, club: 'Liverpool FC', wikiSlug: 'Andy_Robertson' },
+      { name: 'Brennan Johnson', position: 'Forward (WAL)', number: 9, club: 'Tottenham Hotspur', wikiSlug: 'Brennan_Johnson' },
+    ],
   },
   'gb-eng': {
     teamName: 'England National Football Team',
@@ -476,6 +503,12 @@ const CURATED_FOOTBALL: Record<string, CountryFootballProfile> = {
     confederation: 'UEFA',
     homeStadium: 'Wembley Stadium, London',
     iconicMoment: '1966 FIFA World Cup Champions & UEFA Euro 2020/2024 Finalists',
+    keyPlayers: [
+      { name: 'Harry Kane', position: 'Striker (C)', number: 9, club: 'Bayern Munich', wikiSlug: 'Harry_Kane' },
+      { name: 'Jude Bellingham', position: 'Midfielder', number: 10, club: 'Real Madrid', wikiSlug: 'Jude_Bellingham' },
+      { name: 'Bukayo Saka', position: 'Winger', number: 7, club: 'Arsenal FC', wikiSlug: 'Bukayo_Saka' },
+      { name: 'Declan Rice', position: 'Midfielder', number: 4, club: 'Arsenal FC', wikiSlug: 'Declan_Rice' },
+    ],
   },
   'gb-sct': {
     teamName: 'Scotland National Football Team',
@@ -483,6 +516,12 @@ const CURATED_FOOTBALL: Record<string, CountryFootballProfile> = {
     confederation: 'UEFA',
     homeStadium: 'Hampden Park, Glasgow',
     iconicMoment: 'Co-hosts of the world’s first international match in 1872',
+    keyPlayers: [
+      { name: 'Andy Robertson', position: 'Left-Back (C)', number: 3, club: 'Liverpool FC', wikiSlug: 'Andy_Robertson' },
+      { name: 'Scott McTominay', position: 'Midfielder', number: 4, club: 'SSC Napoli', wikiSlug: 'Scott_McTominay' },
+      { name: 'John McGinn', position: 'Midfielder', number: 7, club: 'Aston Villa', wikiSlug: 'John_McGinn' },
+      { name: 'Billy Gilmour', position: 'Midfielder', number: 14, club: 'SSC Napoli', wikiSlug: 'Billy_Gilmour' },
+    ],
   },
   'gb-wls': {
     teamName: 'Wales National Football Team',
@@ -490,6 +529,12 @@ const CURATED_FOOTBALL: Record<string, CountryFootballProfile> = {
     confederation: 'UEFA',
     homeStadium: 'Cardiff City Stadium',
     iconicMoment: 'UEFA Euro 2016 Semifinalists & 2022 FIFA World Cup Qualifiers',
+    keyPlayers: [
+      { name: 'Ben Davies', position: 'Defender (C)', number: 4, club: 'Tottenham Hotspur', wikiSlug: 'Ben_Davies_(footballer,_born_1993)' },
+      { name: 'Brennan Johnson', position: 'Forward', number: 9, club: 'Tottenham Hotspur', wikiSlug: 'Brennan_Johnson' },
+      { name: 'Harry Wilson', position: 'Winger', number: 8, club: 'Fulham FC', wikiSlug: 'Harry_Wilson_(footballer,_born_1997)' },
+      { name: 'Ethan Ampadu', position: 'Midfielder', number: 15, club: 'Leeds United', wikiSlug: 'Ethan_Ampadu' },
+    ],
   },
   'gb-nir': {
     teamName: 'Northern Ireland National Football Team',
@@ -497,6 +542,12 @@ const CURATED_FOOTBALL: Record<string, CountryFootballProfile> = {
     confederation: 'UEFA',
     homeStadium: 'Windsor Park, Belfast',
     iconicMoment: '1958 & 1982 FIFA World Cup Quarter-finalists & Euro 2016 Round of 16',
+    keyPlayers: [
+      { name: 'Conor Bradley', position: 'Right-Back', number: 2, club: 'Liverpool FC', wikiSlug: 'Conor_Bradley' },
+      { name: 'Shea Charles', position: 'Midfielder', number: 16, club: 'Southampton FC', wikiSlug: 'Shea_Charles' },
+      { name: 'Trai Hume', position: 'Defender', number: 5, club: 'Sunderland AFC', wikiSlug: 'Trai_Hume' },
+      { name: 'Isaac Price', position: 'Midfielder', number: 14, club: 'West Bromwich Albion', wikiSlug: 'Isaac_Price' },
+    ],
   },
   br: {
     teamName: 'Brazil National Football Team',
@@ -504,6 +555,12 @@ const CURATED_FOOTBALL: Record<string, CountryFootballProfile> = {
     confederation: 'CONMEBOL',
     homeStadium: 'Estádio do Maracanã, Rio de Janeiro',
     iconicMoment: 'Record 5× FIFA World Cup Champions (1958, 1962, 1970, 1994, 2002)',
+    keyPlayers: [
+      { name: 'Vinícius Júnior', position: 'Winger', number: 7, club: 'Real Madrid', wikiSlug: 'Vinícius_Júnior' },
+      { name: 'Rodrygo', position: 'Forward', number: 10, club: 'Real Madrid', wikiSlug: 'Rodrygo' },
+      { name: 'Alisson Becker', position: 'Goalkeeper', number: 1, club: 'Liverpool FC', wikiSlug: 'Alisson_Becker' },
+      { name: 'Raphinha', position: 'Winger', number: 11, club: 'FC Barcelona', wikiSlug: 'Raphinha' },
+    ],
   },
   ar: {
     teamName: 'Argentina National Football Team',
@@ -511,6 +568,12 @@ const CURATED_FOOTBALL: Record<string, CountryFootballProfile> = {
     confederation: 'CONMEBOL',
     homeStadium: 'Estadio Monumental, Buenos Aires',
     iconicMoment: '3× FIFA World Cup Champions (1978, 1986, 2022) & 16× Copa América Winners',
+    keyPlayers: [
+      { name: 'Lionel Messi', position: 'Forward (C)', number: 10, club: 'Inter Miami CF', wikiSlug: 'Lionel_Messi' },
+      { name: 'Lautaro Martínez', position: 'Striker', number: 22, club: 'Inter Milan', wikiSlug: 'Lautaro_Martínez' },
+      { name: 'Julián Álvarez', position: 'Forward', number: 9, club: 'Atlético Madrid', wikiSlug: 'Julián_Álvarez' },
+      { name: 'Emiliano Martínez', position: 'Goalkeeper', number: 23, club: 'Aston Villa', wikiSlug: 'Emiliano_Martínez' },
+    ],
   },
   fr: {
     teamName: 'France National Football Team',
@@ -518,6 +581,12 @@ const CURATED_FOOTBALL: Record<string, CountryFootballProfile> = {
     confederation: 'UEFA',
     homeStadium: 'Stade de France, Paris',
     iconicMoment: '2× FIFA World Cup Champions (1998, 2018) & 2× UEFA Euro Winners',
+    keyPlayers: [
+      { name: 'Kylian Mbappé', position: 'Forward (C)', number: 10, club: 'Real Madrid', wikiSlug: 'Kylian_Mbappé' },
+      { name: 'William Saliba', position: 'Defender', number: 17, club: 'Arsenal FC', wikiSlug: 'William_Saliba' },
+      { name: 'Aurélien Tchouaméni', position: 'Midfielder', number: 8, club: 'Real Madrid', wikiSlug: 'Aurélien_Tchouaméni' },
+      { name: 'Mike Maignan', position: 'Goalkeeper', number: 16, club: 'AC Milan', wikiSlug: 'Mike_Maignan' },
+    ],
   },
   de: {
     teamName: 'Germany National Football Team',
@@ -525,6 +594,12 @@ const CURATED_FOOTBALL: Record<string, CountryFootballProfile> = {
     confederation: 'UEFA',
     homeStadium: 'Olympiastadion / Allianz Arena',
     iconicMoment: '4× FIFA World Cup Champions & 3× UEFA Euro Winners',
+    keyPlayers: [
+      { name: 'Joshua Kimmich', position: 'Defender / Mid (C)', number: 6, club: 'Bayern Munich', wikiSlug: 'Joshua_Kimmich' },
+      { name: 'Jamal Musiala', position: 'Attacking Midfielder', number: 10, club: 'Bayern Munich', wikiSlug: 'Jamal_Musiala' },
+      { name: 'Florian Wirtz', position: 'Attacking Midfielder', number: 17, club: 'Bayer Leverkusen', wikiSlug: 'Florian_Wirtz' },
+      { name: 'Antonio Rüdiger', position: 'Defender', number: 2, club: 'Real Madrid', wikiSlug: 'Antonio_Rüdiger' },
+    ],
   },
   es: {
     teamName: 'Spain National Football Team',
@@ -532,6 +607,12 @@ const CURATED_FOOTBALL: Record<string, CountryFootballProfile> = {
     confederation: 'UEFA',
     homeStadium: 'Estadio Santiago Bernabéu / La Cartuja',
     iconicMoment: '2010 FIFA World Cup Champions & record 4× UEFA Euro Winners (including 2024)',
+    keyPlayers: [
+      { name: 'Lamine Yamal', position: 'Winger', number: 19, club: 'FC Barcelona', wikiSlug: 'Lamine_Yamal' },
+      { name: 'Rodri', position: 'Midfielder', number: 16, club: 'Manchester City', wikiSlug: 'Rodri_(footballer,_born_1996)' },
+      { name: 'Pedri', position: 'Midfielder', number: 20, club: 'FC Barcelona', wikiSlug: 'Pedri' },
+      { name: 'Nico Williams', position: 'Winger', number: 17, club: 'Athletic Bilbao', wikiSlug: 'Nico_Williams' },
+    ],
   },
   it: {
     teamName: 'Italy National Football Team',
@@ -539,6 +620,12 @@ const CURATED_FOOTBALL: Record<string, CountryFootballProfile> = {
     confederation: 'UEFA',
     homeStadium: 'Stadio Olimpico, Rome',
     iconicMoment: '4× FIFA World Cup Champions & UEFA Euro 2020 Champions',
+    keyPlayers: [
+      { name: 'Gianluigi Donnarumma', position: 'Goalkeeper (C)', number: 1, club: 'Paris Saint-Germain', wikiSlug: 'Gianluigi_Donnarumma' },
+      { name: 'Nicolò Barella', position: 'Midfielder', number: 18, club: 'Inter Milan', wikiSlug: 'Nicolò_Barella' },
+      { name: 'Alessandro Bastoni', position: 'Defender', number: 23, club: 'Inter Milan', wikiSlug: 'Alessandro_Bastoni' },
+      { name: 'Federico Dimarco', position: 'Wing-Back', number: 3, club: 'Inter Milan', wikiSlug: 'Federico_Dimarco' },
+    ],
   },
   pt: {
     teamName: 'Portugal National Football Team',
@@ -546,6 +633,12 @@ const CURATED_FOOTBALL: Record<string, CountryFootballProfile> = {
     confederation: 'UEFA',
     homeStadium: 'Estádio da Luz, Lisbon',
     iconicMoment: 'UEFA Euro 2016 & 2019 UEFA Nations League Champions',
+    keyPlayers: [
+      { name: 'Cristiano Ronaldo', position: 'Forward (C)', number: 7, club: 'Al-Nassr FC', wikiSlug: 'Cristiano_Ronaldo' },
+      { name: 'Bruno Fernandes', position: 'Midfielder', number: 8, club: 'Manchester United', wikiSlug: 'Bruno_Fernandes' },
+      { name: 'Bernardo Silva', position: 'Midfielder', number: 10, club: 'Manchester City', wikiSlug: 'Bernardo_Silva' },
+      { name: 'Rúben Dias', position: 'Defender', number: 4, club: 'Manchester City', wikiSlug: 'Rúben_Dias' },
+    ],
   },
   us: {
     teamName: 'United States National Soccer Team',
@@ -553,6 +646,12 @@ const CURATED_FOOTBALL: Record<string, CountryFootballProfile> = {
     confederation: 'CONCACAF',
     homeStadium: 'Co-Host of FIFA World Cup 2026',
     iconicMoment: '4× FIFA Women’s World Cup Champions & 7× CONCACAF Gold Cup Winners',
+    keyPlayers: [
+      { name: 'Christian Pulisic', position: 'Winger (C)', number: 10, club: 'AC Milan', wikiSlug: 'Christian_Pulisic' },
+      { name: 'Weston McKennie', position: 'Midfielder', number: 8, club: 'Juventus FC', wikiSlug: 'Weston_McKennie' },
+      { name: 'Antonee Robinson', position: 'Left-Back', number: 5, club: 'Fulham FC', wikiSlug: 'Antonee_Robinson' },
+      { name: 'Tyler Adams', position: 'Midfielder', number: 4, club: 'AFC Bournemouth', wikiSlug: 'Tyler_Adams' },
+    ],
   },
   in: {
     teamName: 'India National Football Team',
@@ -560,6 +659,12 @@ const CURATED_FOOTBALL: Record<string, CountryFootballProfile> = {
     confederation: 'AFC · SAFF',
     homeStadium: 'Salt Lake Stadium, Kolkata',
     iconicMoment: 'Record 9× SAFF Championship Winners & 1956 Olympic Semifinalists',
+    keyPlayers: [
+      { name: 'Sunil Chhetri', position: 'Forward (Legend)', number: 11, club: 'Bengaluru FC', wikiSlug: 'Sunil_Chhetri' },
+      { name: 'Gurpreet Singh Sandhu', position: 'Goalkeeper (C)', number: 1, club: 'Bengaluru FC', wikiSlug: 'Gurpreet_Singh_Sandhu' },
+      { name: 'Sandesh Jhingan', position: 'Defender', number: 5, club: 'FC Goa', wikiSlug: 'Sandesh_Jhingan' },
+      { name: 'Lallianzuala Chhangte', position: 'Winger', number: 17, club: 'Mumbai City FC', wikiSlug: 'Lallianzuala_Chhangte' },
+    ],
   },
   au: {
     teamName: 'Australia National Football Team',
@@ -567,6 +672,12 @@ const CURATED_FOOTBALL: Record<string, CountryFootballProfile> = {
     confederation: 'AFC',
     homeStadium: 'Stadium Australia, Sydney',
     iconicMoment: '2015 AFC Asian Cup Champions & 2022 World Cup Round of 16',
+    keyPlayers: [
+      { name: 'Mathew Ryan', position: 'Goalkeeper (C)', number: 1, club: 'RC Lens', wikiSlug: 'Mathew_Ryan' },
+      { name: 'Jackson Irvine', position: 'Midfielder', number: 22, club: 'FC St. Pauli', wikiSlug: 'Jackson_Irvine' },
+      { name: 'Harry Souttar', position: 'Defender', number: 19, club: 'Leicester City', wikiSlug: 'Harry_Souttar' },
+      { name: 'Sam Kerr', position: 'Forward (Matildas)', number: 20, club: 'Chelsea FC', wikiSlug: 'Sam_Kerr' },
+    ],
   },
   kr: {
     teamName: 'South Korea National Football Team',
@@ -574,6 +685,12 @@ const CURATED_FOOTBALL: Record<string, CountryFootballProfile> = {
     confederation: 'AFC',
     homeStadium: 'Seoul World Cup Stadium',
     iconicMoment: '2002 FIFA World Cup Semifinalists & 11 consecutive World Cup appearances',
+    keyPlayers: [
+      { name: 'Son Heung-min', position: 'Forward (C)', number: 7, club: 'Tottenham Hotspur', wikiSlug: 'Son_Heung-min' },
+      { name: 'Kim Min-jae', position: 'Defender', number: 4, club: 'Bayern Munich', wikiSlug: 'Kim_Min-jae' },
+      { name: 'Lee Kang-in', position: 'Attacking Midfielder', number: 18, club: 'Paris Saint-Germain', wikiSlug: 'Lee_Kang-in' },
+      { name: 'Hwang Hee-chan', position: 'Forward', number: 11, club: 'Wolverhampton', wikiSlug: 'Hwang_Hee-chan' },
+    ],
   },
   ma: {
     teamName: 'Morocco National Football Team',
@@ -581,6 +698,233 @@ const CURATED_FOOTBALL: Record<string, CountryFootballProfile> = {
     confederation: 'CAF',
     homeStadium: 'Prince Moulay Abdellah Stadium, Rabat',
     iconicMoment: 'First African nation to reach the FIFA World Cup Semifinals (2022)',
+    keyPlayers: [
+      { name: 'Achraf Hakimi', position: 'Right-Back (C)', number: 2, club: 'Paris Saint-Germain', wikiSlug: 'Achraf_Hakimi' },
+      { name: 'Yassine Bounou', position: 'Goalkeeper', number: 1, club: 'Al-Hilal SFC', wikiSlug: 'Yassine_Bounou' },
+      { name: 'Brahim Díaz', position: 'Attacking Midfielder', number: 10, club: 'Real Madrid', wikiSlug: 'Brahim_Díaz' },
+      { name: 'Sofyan Amrabat', position: 'Midfielder', number: 4, club: 'Fenerbahçe SK', wikiSlug: 'Sofyan_Amrabat' },
+    ],
+  },
+  nl: {
+    teamName: 'Netherlands National Football Team',
+    nickname: 'Oranje',
+    confederation: 'UEFA',
+    homeStadium: 'Johan Cruyff Arena, Amsterdam',
+    iconicMoment: 'UEFA Euro 1988 Champions & pioneers of Total Football',
+    keyPlayers: [
+      { name: 'Virgil van Dijk', position: 'Defender (C)', number: 4, club: 'Liverpool FC', wikiSlug: 'Virgil_van_Dijk' },
+      { name: 'Frenkie de Jong', position: 'Midfielder', number: 21, club: 'FC Barcelona', wikiSlug: 'Frenkie_de_Jong' },
+      { name: 'Cody Gakpo', position: 'Forward', number: 11, club: 'Liverpool FC', wikiSlug: 'Cody_Gakpo' },
+      { name: 'Xavi Simons', position: 'Attacking Midfielder', number: 7, club: 'RB Leipzig', wikiSlug: 'Xavi_Simons' },
+    ],
+  },
+  eg: {
+    teamName: 'Egypt National Football Team',
+    nickname: 'The Pharaohs',
+    confederation: 'CAF',
+    homeStadium: 'Cairo International Stadium',
+    iconicMoment: 'Record 7× Africa Cup of Nations Champions',
+    keyPlayers: [
+      { name: 'Mohamed Salah', position: 'Forward (C)', number: 10, club: 'Liverpool FC', wikiSlug: 'Mohamed_Salah' },
+      { name: 'Omar Marmoush', position: 'Forward', number: 7, club: 'Manchester City', wikiSlug: 'Omar_Marmoush' },
+      { name: 'Mohamed El Shenawy', position: 'Goalkeeper', number: 1, club: 'Al Ahly SC', wikiSlug: 'Mohamed_El_Shenawy' },
+      { name: 'Trézéguet', position: 'Winger', number: 17, club: 'Al-Rayyan SC', wikiSlug: 'Trézéguet_(Egyptian_footballer)' },
+    ],
+  },
+  ng: {
+    teamName: 'Nigeria National Football Team',
+    nickname: 'Super Eagles',
+    confederation: 'CAF',
+    homeStadium: 'Moshood Abiola National Stadium, Abuja',
+    iconicMoment: '3× Africa Cup of Nations Champions & 1996 Olympic Gold Medalists',
+    keyPlayers: [
+      { name: 'Victor Osimhen', position: 'Striker', number: 9, club: 'Galatasaray SK', wikiSlug: 'Victor_Osimhen' },
+      { name: 'Ademola Lookman', position: 'Forward', number: 18, club: 'Atalanta BC', wikiSlug: 'Ademola_Lookman' },
+      { name: 'Alex Iwobi', position: 'Midfielder', number: 17, club: 'Fulham FC', wikiSlug: 'Alex_Iwobi' },
+      { name: 'Wilfred Ndidi', position: 'Midfielder', number: 4, club: 'Leicester City', wikiSlug: 'Wilfred_Ndidi' },
+    ],
+  },
+  no: {
+    teamName: 'Norway National Football Team',
+    nickname: 'Landslaget (The Lions)',
+    confederation: 'UEFA',
+    homeStadium: 'Ullevaal Stadion, Oslo',
+    iconicMoment: '1936 Olympic Bronze Medalists & 1998 World Cup Knockout Stage',
+    keyPlayers: [
+      { name: 'Erling Haaland', position: 'Striker', number: 9, club: 'Manchester City', wikiSlug: 'Erling_Haaland' },
+      { name: 'Martin Ødegaard', position: 'Midfielder (C)', number: 10, club: 'Arsenal FC', wikiSlug: 'Martin_Ødegaard' },
+      { name: 'Alexander Sørloth', position: 'Forward', number: 19, club: 'Atlético Madrid', wikiSlug: 'Alexander_Sørloth' },
+      { name: 'Julian Ryerson', position: 'Defender', number: 14, club: 'Borussia Dortmund', wikiSlug: 'Julian_Ryerson' },
+    ],
+  },
+  be: {
+    teamName: 'Belgium National Football Team',
+    nickname: 'Red Devils (Rode Duivels)',
+    confederation: 'UEFA',
+    homeStadium: 'King Baudouin Stadium, Brussels',
+    iconicMoment: '2018 FIFA World Cup Third Place & multi-year FIFA #1 World Ranking',
+    keyPlayers: [
+      { name: 'Kevin De Bruyne', position: 'Midfielder (C)', number: 7, club: 'Manchester City', wikiSlug: 'Kevin_De_Bruyne' },
+      { name: 'Romelu Lukaku', position: 'Striker', number: 10, club: 'SSC Napoli', wikiSlug: 'Romelu_Lukaku' },
+      { name: 'Jérémy Doku', position: 'Winger', number: 22, club: 'Manchester City', wikiSlug: 'Jérémy_Doku' },
+      { name: 'Thibaut Courtois', position: 'Goalkeeper', number: 1, club: 'Real Madrid', wikiSlug: 'Thibaut_Courtois' },
+    ],
+  },
+  hr: {
+    teamName: 'Croatia National Football Team',
+    nickname: 'Vatreni (The Blazers)',
+    confederation: 'UEFA',
+    homeStadium: 'Stadion Maksimir, Zagreb',
+    iconicMoment: '2018 FIFA World Cup Finalists & 1998 / 2022 Third-Place Finishers',
+    keyPlayers: [
+      { name: 'Luka Modrić', position: 'Midfielder (C)', number: 10, club: 'Real Madrid', wikiSlug: 'Luka_Modrić' },
+      { name: 'Joško Gvardiol', position: 'Defender', number: 4, club: 'Manchester City', wikiSlug: 'Joško_Gvardiol' },
+      { name: 'Mateo Kovačić', position: 'Midfielder', number: 8, club: 'Manchester City', wikiSlug: 'Mateo_Kovačić' },
+      { name: 'Dominik Livaković', position: 'Goalkeeper', number: 1, club: 'Fenerbahçe SK', wikiSlug: 'Dominik_Livaković' },
+    ],
+  },
+  uy: {
+    teamName: 'Uruguay National Football Team',
+    nickname: 'La Celeste',
+    confederation: 'CONMEBOL',
+    homeStadium: 'Estadio Centenario, Montevideo',
+    iconicMoment: 'Inaugural 1930 & 1950 FIFA World Cup Champions and 15× Copa América Winners',
+    keyPlayers: [
+      { name: 'Federico Valverde', position: 'Midfielder (C)', number: 15, club: 'Real Madrid', wikiSlug: 'Federico_Valverde' },
+      { name: 'Darwin Núñez', position: 'Striker', number: 9, club: 'Liverpool FC', wikiSlug: 'Darwin_Núñez' },
+      { name: 'Ronald Araújo', position: 'Defender', number: 4, club: 'FC Barcelona', wikiSlug: 'Ronald_Araújo' },
+      { name: 'Manuel Ugarte', position: 'Midfielder', number: 5, club: 'Manchester United', wikiSlug: 'Manuel_Ugarte' },
+    ],
+  },
+  pl: {
+    teamName: 'Poland National Football Team',
+    nickname: 'Biało-Czerwoni (The Eagles)',
+    confederation: 'UEFA',
+    homeStadium: 'PGE Narodowy, Warsaw',
+    iconicMoment: '1972 Olympic Gold Medalists & 1974 / 1982 World Cup Third Place',
+    keyPlayers: [
+      { name: 'Robert Lewandowski', position: 'Striker (C)', number: 9, club: 'FC Barcelona', wikiSlug: 'Robert_Lewandowski' },
+      { name: 'Piotr Zieliński', position: 'Midfielder', number: 10, club: 'Inter Milan', wikiSlug: 'Piotr_Zieliński' },
+      { name: 'Jakub Kiwior', position: 'Defender', number: 14, club: 'Arsenal FC', wikiSlug: 'Jakub_Kiwior' },
+      { name: 'Nicola Zalewski', position: 'Wing-Back', number: 21, club: 'Inter Milan', wikiSlug: 'Nicola_Zalewski' },
+    ],
+  },
+  ca: {
+    teamName: 'Canada National Soccer Team',
+    nickname: 'Les Rouges',
+    confederation: 'CONCACAF',
+    homeStadium: 'BMO Field / BC Place (2026 Co-Host)',
+    iconicMoment: '2000 CONCACAF Gold Cup Champions & 2024 Copa América Semifinalists',
+    keyPlayers: [
+      { name: 'Alphonso Davies', position: 'Left-Back (C)', number: 19, club: 'Bayern Munich', wikiSlug: 'Alphonso_Davies' },
+      { name: 'Jonathan David', position: 'Striker', number: 20, club: 'Lille OSC', wikiSlug: 'Jonathan_David' },
+      { name: 'Stephen Eustáquio', position: 'Midfielder', number: 7, club: 'FC Porto', wikiSlug: 'Stephen_Eustáquio' },
+      { name: 'Alistair Johnston', position: 'Right-Back', number: 2, club: 'Celtic FC', wikiSlug: 'Alistair_Johnston' },
+    ],
+  },
+  mx: {
+    teamName: 'Mexico National Football Team',
+    nickname: 'El Tri',
+    confederation: 'CONCACAF',
+    homeStadium: 'Estadio Azteca, Mexico City (2026 Co-Host)',
+    iconicMoment: 'Record 9× CONCACAF Gold Cup Winners & 2012 Olympic Gold Medalists',
+    keyPlayers: [
+      { name: 'Edson Álvarez', position: 'Midfielder (C)', number: 4, club: 'West Ham United', wikiSlug: 'Edson_Álvarez' },
+      { name: 'Santiago Giménez', position: 'Striker', number: 9, club: 'AC Milan', wikiSlug: 'Santiago_Giménez' },
+      { name: 'Raúl Jiménez', position: 'Forward', number: 7, club: 'Fulham FC', wikiSlug: 'Raúl_Jiménez' },
+      { name: 'Guillermo Ochoa', position: 'Goalkeeper', number: 13, club: 'AVS Futebol', wikiSlug: 'Guillermo_Ochoa' },
+    ],
+  },
+  tr: {
+    teamName: 'Türkiye National Football Team',
+    nickname: 'Ay-Yıldızlılar (Crescent-Stars)',
+    confederation: 'UEFA',
+    homeStadium: 'Atatürk Olympic Stadium, Istanbul',
+    iconicMoment: '2002 FIFA World Cup Third Place & UEFA Euro 2008 Semifinalists',
+    keyPlayers: [
+      { name: 'Hakan Çalhanoğlu', position: 'Midfielder (C)', number: 10, club: 'Inter Milan', wikiSlug: 'Hakan_Çalhanoğlu' },
+      { name: 'Arda Güler', position: 'Attacking Midfielder', number: 8, club: 'Real Madrid', wikiSlug: 'Arda_Güler' },
+      { name: 'Kenan Yıldız', position: 'Forward', number: 19, club: 'Juventus FC', wikiSlug: 'Kenan_Yıldız' },
+      { name: 'Ferdi Kadıoğlu', position: 'Full-Back', number: 20, club: 'Brighton & Hove Albion', wikiSlug: 'Ferdi_Kadıoğlu' },
+    ],
+  },
+  se: {
+    teamName: 'Sweden National Football Team',
+    nickname: 'Blågult (The Blue and Yellow)',
+    confederation: 'UEFA',
+    homeStadium: 'Strawberry Arena, Stockholm',
+    iconicMoment: '1958 FIFA World Cup Finalists & 1948 Olympic Gold Medalists',
+    keyPlayers: [
+      { name: 'Alexander Isak', position: 'Striker', number: 9, club: 'Newcastle United', wikiSlug: 'Alexander_Isak' },
+      { name: 'Viktor Gyökeres', position: 'Striker', number: 17, club: 'Sporting CP', wikiSlug: 'Viktor_Gyökeres' },
+      { name: 'Dejan Kulusevski', position: 'Winger', number: 21, club: 'Tottenham Hotspur', wikiSlug: 'Dejan_Kulusevski' },
+      { name: 'Victor Lindelöf', position: 'Defender (C)', number: 3, club: 'Manchester United', wikiSlug: 'Victor_Lindelöf' },
+    ],
+  },
+  ch: {
+    teamName: 'Switzerland National Football Team',
+    nickname: 'Nati',
+    confederation: 'UEFA',
+    homeStadium: 'St. Jakob-Park, Basel',
+    iconicMoment: 'Consistent UEFA Euro & FIFA World Cup Knockout Contenders',
+    keyPlayers: [
+      { name: 'Granit Xhaka', position: 'Midfielder (C)', number: 10, club: 'Bayer Leverkusen', wikiSlug: 'Granit_Xhaka' },
+      { name: 'Manuel Akanji', position: 'Defender', number: 5, club: 'Manchester City', wikiSlug: 'Manuel_Akanji' },
+      { name: 'Breel Embolo', position: 'Striker', number: 7, club: 'AS Monaco', wikiSlug: 'Breel_Embolo' },
+      { name: 'Gregor Kobel', position: 'Goalkeeper', number: 1, club: 'Borussia Dortmund', wikiSlug: 'Gregor_Kobel' },
+    ],
+  },
+  co: {
+    teamName: 'Colombia National Football Team',
+    nickname: 'Los Cafeteros',
+    confederation: 'CONMEBOL',
+    homeStadium: 'Estadio Metropolitano, Barranquilla',
+    iconicMoment: '2001 Copa América Champions & 2024 Copa América Finalists',
+    keyPlayers: [
+      { name: 'Luis Díaz', position: 'Winger', number: 7, club: 'Liverpool FC', wikiSlug: 'Luis_Díaz_(Colombian_footballer)' },
+      { name: 'James Rodríguez', position: 'Playmaker (C)', number: 10, club: 'Club León', wikiSlug: 'James_Rodríguez' },
+      { name: 'Daniel Muñoz', position: 'Right-Back', number: 21, club: 'Crystal Palace', wikiSlug: 'Daniel_Muñoz_(footballer)' },
+      { name: 'Jhon Durán', position: 'Striker', number: 9, club: 'Al-Nassr FC', wikiSlug: 'Jhon_Durán' },
+    ],
+  },
+  sn: {
+    teamName: 'Senegal National Football Team',
+    nickname: 'Lions of Teranga',
+    confederation: 'CAF',
+    homeStadium: 'Diamniadio Olympic Stadium, Dakar',
+    iconicMoment: '2021 Africa Cup of Nations Champions & 2002 World Cup Quarterfinalists',
+    keyPlayers: [
+      { name: 'Sadio Mané', position: 'Forward', number: 10, club: 'Al-Nassr FC', wikiSlug: 'Sadio_Mané' },
+      { name: 'Kalidou Koulibaly', position: 'Defender (C)', number: 3, club: 'Al-Hilal SFC', wikiSlug: 'Kalidou_Koulibaly' },
+      { name: 'Nicolas Jackson', position: 'Striker', number: 7, club: 'Chelsea FC', wikiSlug: 'Nicolas_Jackson' },
+      { name: 'Édouard Mendy', position: 'Goalkeeper', number: 16, club: 'Al-Ahli SFC', wikiSlug: 'Édouard_Mendy' },
+    ],
+  },
+  nz: {
+    teamName: 'New Zealand National Football Team',
+    nickname: 'All Whites / Football Ferns',
+    confederation: 'OFC',
+    homeStadium: 'Eden Park, Auckland',
+    iconicMoment: '5× OFC Nations Cup Champions & undefeated in 2010 FIFA World Cup group stage',
+    keyPlayers: [
+      { name: 'Chris Wood', position: 'Striker (C)', number: 9, club: 'Nottingham Forest', wikiSlug: 'Chris_Wood_(footballer,_born_1991)' },
+      { name: 'Liberato Cacace', position: 'Left-Back', number: 13, club: 'Empoli FC', wikiSlug: 'Liberato_Cacace' },
+      { name: 'Marko Stamenić', position: 'Midfielder', number: 6, club: 'Olympiacos FC', wikiSlug: 'Marko_Stamenić' },
+      { name: 'Sarpreet Singh', position: 'Attacking Midfielder', number: 10, club: 'UD Leiria', wikiSlug: 'Sarpreet_Singh' },
+    ],
+  },
+  sa: {
+    teamName: 'Saudi Arabia National Football Team',
+    nickname: 'The Green Falcons',
+    confederation: 'AFC',
+    homeStadium: 'King Fahd Sports City, Riyadh',
+    iconicMoment: '3× AFC Asian Cup Champions & famous 2022 World Cup win over Argentina',
+    keyPlayers: [
+      { name: 'Salem Al-Dawsari', position: 'Winger (C)', number: 10, club: 'Al-Hilal SFC', wikiSlug: 'Salem_Al-Dawsari' },
+      { name: 'Saud Abdulhamid', position: 'Right-Back', number: 12, club: 'AS Roma', wikiSlug: 'Saud_Abdulhamid' },
+      { name: 'Firas Al-Buraikan', position: 'Striker', number: 9, club: 'Al-Ahli SFC', wikiSlug: 'Firas_Al-Buraikan' },
+      { name: 'Mohammed Al-Owais', position: 'Goalkeeper', number: 21, club: 'Al-Hilal SFC', wikiSlug: 'Mohammed_Al-Owais' },
+    ],
   },
 };
 
@@ -603,5 +947,11 @@ export function getCountryFootballProfile(country: Country): CountryFootballProf
     confederation: confed,
     homeStadium: `${country.capital} National Stadium`,
     iconicMoment: `Represents ${country.name} in ${confed} and FIFA international qualifiers`,
+    keyPlayers: [
+      { name: `${country.name} Captain`, position: 'Midfielder (C)', number: 10, club: `${country.capital} Premier XI` },
+      { name: 'Lead Striker', position: 'Center Forward', number: 9, club: `${confed} Domestic League` },
+      { name: 'Defensive Anchor', position: 'Center-Back', number: 4, club: `${country.name} National Squad` },
+      { name: 'First-Choice Keeper', position: 'Goalkeeper', number: 1, club: `${country.name} National Squad` },
+    ],
   };
 }

@@ -10,6 +10,7 @@ export interface VoiceInterruptSignal {
 interface ContinuousVoiceNarratorProps {
   interruptSignal: VoiceInterruptSignal | null;
   isAnthemPlaying: boolean;
+  elevatedOffset?: boolean;
 }
 
 function selectPreferredVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
@@ -46,6 +47,7 @@ function selectPreferredVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVo
 export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = ({
   interruptSignal,
   isAnthemPlaying,
+  elevatedOffset = false,
 }) => {
   const isSupported = typeof window !== 'undefined' && 'speechSynthesis' in window;
 
@@ -306,7 +308,9 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
   return (
     <aside
       aria-label="On-Demand AI Voice Assistant"
-      className="fixed bottom-4 left-4 z-40 flex max-w-[calc(100vw-2rem)] items-center gap-2.5 rounded-2xl border border-sky-400/30 bg-[#071022]/95 px-3 py-2 text-slate-100 shadow-[0_12px_36px_-10px_rgba(14,165,233,0.45)] sm:max-w-[440px] sm:gap-3 sm:px-3.5 sm:py-2.5"
+      className={`fixed left-3.5 sm:left-4 z-[60] flex max-w-[calc(100vw-1.75rem)] items-center gap-2.5 rounded-2xl border border-sky-400/30 bg-[#071022]/95 px-3 py-2 text-slate-100 shadow-[0_12px_36px_-10px_rgba(14,165,233,0.45)] transition-all sm:max-w-[440px] sm:gap-3 sm:px-3.5 sm:py-2.5 ${
+        elevatedOffset ? 'bottom-[74px] sm:bottom-16' : 'bottom-4'
+      }`}
     >
       {/* Active Voice Icon */}
       <div
