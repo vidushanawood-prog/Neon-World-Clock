@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft,
   ArrowRightLeft,
+  ArrowUpRight,
   BookOpen,
   Briefcase,
   Cable,
@@ -17,6 +18,7 @@ import {
   Lock,
   MapPin,
   Maximize2,
+  Menu,
   Moon,
   Package,
   Phone,
@@ -31,7 +33,6 @@ import {
   Volume2,
   Wifi,
   Wind,
-  X,
 } from 'lucide-react';
 import type { Country } from '../data/countries';
 import { getCountryConnectivity } from '../data/connectivity';
@@ -85,6 +86,10 @@ interface CountryModalProps {
   onNarrateCountry: (country: Country) => void;
   onReadOverview: (country: Country, overviewText: string) => void;
   onNarrateSection?: (topic: string, text: string) => void;
+  onOpenMenu?: () => void;
+  onOpenFootballPage?: (country: Country) => void;
+  onOpenCablesPage?: (country: Country) => void;
+  onOpenSatellitesPage?: (country: Country) => void;
 }
 
 function getInitials(name: string): string {
@@ -117,9 +122,12 @@ export const CountryModal: React.FC<CountryModalProps> = ({
   onNarrateCountry,
   onReadOverview,
   onNarrateSection,
+  onOpenMenu,
+  onOpenFootballPage,
+  onOpenCablesPage,
+  onOpenSatellitesPage,
 }) => {
   const footballSectionRef = useRef<HTMLElement | null>(null);
-  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const [amountInput, setAmountInput] = useState<string>('100');
   const [converterDir, setConverterDir] = useState<'to-lkr' | 'from-lkr'>('to-lkr');
   const [copiedLocal, setCopiedLocal] = useState(false);
@@ -151,9 +159,7 @@ export const CountryModal: React.FC<CountryModalProps> = ({
     setCopiedLocal(false);
     setFailedUrls(new Set());
     setPlayerPortraits({});
-    if (scrollContainerRef.current) {
-      scrollContainerRef.current.scrollTop = 0;
-    }
+    window.scrollTo({ top: 0, behavior: 'auto' });
 
     let cancelled = false;
     const baseline = getBaselineCountryProfile(country);
@@ -182,17 +188,14 @@ export const CountryModal: React.FC<CountryModalProps> = ({
     };
   }, [country]);
 
-  // Lock body scroll cleanly while full-screen country view is open
+  // Escape key returns to previous page cleanly
   useEffect(() => {
     if (!country) return;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', handleKey);
     return () => {
-      document.body.style.overflow = prevOverflow;
       window.removeEventListener('keydown', handleKey);
     };
   }, [country, onClose]);
@@ -352,23 +355,21 @@ export const CountryModal: React.FC<CountryModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex h-[100dvh] w-full max-w-[100vw] flex-col overflow-hidden bg-[#050a18] text-slate-100"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="country-modal-title"
+      className="relative flex min-h-[100dvh] w-full max-w-[100vw] flex-col overflow-x-hidden bg-[#050a18] text-slate-100"
+      aria-labelledby="country-page-title"
     >
-      {/* STICKY FULL-SCREEN HEADER (Zero crowding even on 360px phones) */}
-      <header className="shrink-0 border-b border-white/[0.09] bg-[#060d1f] px-3.5 py-3 sm:px-6">
+      {/* DEDICATED FULL-SCREEN COUNTRY PAGE HEADER */}
+      <header className="sticky top-0 z-30 shrink-0 border-b border-white/[0.09] bg-[#060d1f]/95 px-3.5 py-3 backdrop-blur-xl sm:px-6">
         <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-2 sm:gap-4">
           <div className="flex min-w-0 items-center gap-2.5 sm:gap-3.5">
             <button
               type="button"
               onClick={onClose}
-              aria-label="Back to World Clocks"
-              className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl border border-white/12 bg-white/[0.06] px-2.5 text-xs font-semibold text-slate-200 transition-colors hover:bg-white/[0.12] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 sm:px-3"
+              aria-label="Go back to previous page"
+              className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-white/12 bg-white/[0.06] px-3 text-xs font-semibold text-slate-200 transition-colors hover:bg-white/[0.12] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
             >
               <ArrowLeft className="h-4 w-4 text-sky-400" aria-hidden="true" />
-              <span className="hidden sm:inline">Back</span>
+              <span>Back</span>
             </button>
 
             {flagValid ? (
@@ -388,12 +389,12 @@ export const CountryModal: React.FC<CountryModalProps> = ({
             )}
 
             <div className="min-w-0">
-              <h2
-                id="country-modal-title"
+              <h1
+                id="country-page-title"
                 className="truncate text-base font-bold tracking-tight text-white sm:text-xl"
               >
                 {country.name}
-              </h2>
+              </h1>
               <p className="truncate text-[11px] text-slate-400 sm:text-xs">
                 <span className="font-medium text-slate-200">{country.capital}</span>
                 <span aria-hidden="true"> · </span>
@@ -408,7 +409,7 @@ export const CountryModal: React.FC<CountryModalProps> = ({
               onClick={() => onNarrateCountry(country)}
               aria-label={`Narrate ${country.name} details`}
               title="On-Demand Voice Narrator: Read country details aloud"
-              className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-cyan-400/35 bg-cyan-500/15 px-2.5 text-xs font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/25 hover:text-white whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 sm:px-3.5"
+              className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-cyan-400/35 bg-cyan-500/15 px-2.5 text-xs font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/25 hover:text-white whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 sm:px-3.5"
             >
               <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
               <span className="hidden sm:inline">Narrate</span>
@@ -418,7 +419,7 @@ export const CountryModal: React.FC<CountryModalProps> = ({
               type="button"
               onClick={() => onTogglePin(country.iso)}
               aria-label={isPinned ? 'Unpin favorite' : 'Pin favorite'}
-              className={`flex h-9 w-9 items-center justify-center rounded-xl border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+              className={`flex h-10 w-10 items-center justify-center rounded-xl border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
                 isPinned
                   ? 'border-amber-400/40 bg-amber-400/15 text-amber-300'
                   : 'border-white/12 bg-white/[0.06] text-slate-300 hover:bg-white/[0.12] hover:text-white'
@@ -427,24 +428,24 @@ export const CountryModal: React.FC<CountryModalProps> = ({
               <Star className="h-4 w-4" fill={isPinned ? 'currentColor' : 'none'} aria-hidden="true" />
             </button>
 
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="Close country view"
-              className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/12 bg-white/[0.06] text-slate-300 transition-colors hover:bg-white/[0.12] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
-            >
-              <X className="h-4 w-4" aria-hidden="true" />
-            </button>
+            {onOpenMenu && (
+              <button
+                type="button"
+                onClick={onOpenMenu}
+                aria-label="Open navigation menu"
+                className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.07] px-3 text-xs font-semibold text-slate-100 transition-colors hover:bg-white/[0.14] hover:text-white whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+              >
+                <Menu className="h-4 w-4 text-sky-400" aria-hidden="true" />
+                <span className="hidden sm:inline">Menu</span>
+              </button>
+            )}
           </div>
         </div>
       </header>
 
-      {/* FULL-SCREEN ADAPTIVE SCROLLABLE BODY (Spacious cards, zero cramped boxes, zero horizontal scroll) */}
-      <div
-        ref={scrollContainerRef}
-        className="flex-1 overflow-y-auto overflow-x-hidden bg-gradient-to-b from-[#071022] via-[#060c1b] to-[#050914]"
-      >
-        <div className="mx-auto w-full max-w-6xl space-y-6 px-3.5 pt-5 pb-28 sm:space-y-7 sm:px-6 sm:pt-6 sm:pb-24 lg:px-8">
+      {/* FULL-SCREEN DEDICATED PAGE BODY */}
+      <main className="flex-1 bg-gradient-to-b from-[#071022] via-[#060c1b] to-[#050914]">
+        <div className="mx-auto w-full max-w-6xl space-y-6 px-3.5 pt-6 pb-12 sm:space-y-7 sm:px-6 sm:pt-7 lg:px-8">
           {/* 1. HERO BAND: Auto-Rotating Dual Character Showcase + Live Clock, Weather & Anthem */}
           <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
             {/* Strictly Auto-Rotating 3D Dual Character Stage */}
@@ -879,14 +880,26 @@ export const CountryModal: React.FC<CountryModalProps> = ({
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={handleNarrateFootball}
-                className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-amber-400/35 bg-amber-500/12 px-3 text-xs font-semibold text-amber-200 transition-colors hover:bg-amber-500/22 hover:text-white whitespace-nowrap"
-              >
-                <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>Narrate Team</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleNarrateFootball}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-amber-400/35 bg-amber-500/12 px-3 text-xs font-semibold text-amber-200 transition-colors hover:bg-amber-500/22 hover:text-white whitespace-nowrap"
+                >
+                  <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Narrate Team</span>
+                </button>
+                {onOpenFootballPage && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenFootballPage(country)}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-amber-400 px-3.5 text-xs font-semibold text-slate-950 transition-colors hover:bg-amber-300 whitespace-nowrap"
+                  >
+                    <span>Football Page</span>
+                    <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
+                )}
+              </div>
             </div>
 
             <p className="mt-3 rounded-2xl border border-white/[0.07] bg-slate-950/60 px-4 py-3 text-xs leading-relaxed text-slate-200 sm:text-sm">
@@ -947,12 +960,24 @@ export const CountryModal: React.FC<CountryModalProps> = ({
               aria-label="Submarine cables and major ISPs"
               className="rounded-3xl border border-white/[0.09] bg-slate-900/60 p-5 sm:p-6 lg:col-span-7"
             >
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <h3 className="flex items-center gap-2 text-sm font-bold text-white sm:text-base">
-                  <Cable className="h-4 w-4 text-cyan-400" aria-hidden="true" />
-                  <span>ISPs &amp; Submarine Cables</span>
-                </h3>
-                <span className="text-xs text-slate-400">{connectivity.gatewaySummary}</span>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="flex items-center gap-2 text-sm font-bold text-white sm:text-base">
+                    <Cable className="h-4 w-4 text-cyan-400" aria-hidden="true" />
+                    <span>ISPs &amp; Submarine Cables</span>
+                  </h3>
+                  <span className="text-xs text-slate-400">{connectivity.gatewaySummary}</span>
+                </div>
+                {onOpenCablesPage && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenCablesPage(country)}
+                    className="inline-flex h-8 items-center gap-1 rounded-lg border border-cyan-400/35 bg-cyan-500/12 px-2.5 text-[11px] font-semibold text-cyan-200 hover:bg-cyan-500/22 hover:text-white whitespace-nowrap"
+                  >
+                    <span>Cables Page</span>
+                    <ArrowUpRight className="h-3 w-3" aria-hidden="true" />
+                  </button>
+                )}
               </div>
 
               <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -1010,14 +1035,26 @@ export const CountryModal: React.FC<CountryModalProps> = ({
               aria-label="Overhead satellites and ISS pass status"
               className="rounded-3xl border border-white/[0.09] bg-slate-900/60 p-5 sm:p-6 lg:col-span-5"
             >
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <h3 className="flex items-center gap-2 text-sm font-bold text-white sm:text-base">
                   <Satellite className="h-4 w-4 text-emerald-400" aria-hidden="true" />
                   <span>Satellites &amp; ISS Pass</span>
                 </h3>
-                <span className="tabular-clock text-xs text-emerald-300">
-                  {overheadSats.issMatch.distanceKm.toLocaleString()} km
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="tabular-clock text-xs text-emerald-300">
+                    {overheadSats.issMatch.distanceKm.toLocaleString()} km
+                  </span>
+                  {onOpenSatellitesPage && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenSatellitesPage(country)}
+                      className="inline-flex h-8 items-center gap-1 rounded-lg border border-emerald-400/35 bg-emerald-500/12 px-2.5 text-[11px] font-semibold text-emerald-200 hover:bg-emerald-500/22 hover:text-white whitespace-nowrap"
+                    >
+                      <span>Satellites</span>
+                      <ArrowUpRight className="h-3 w-3" aria-hidden="true" />
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="mt-4 space-y-2.5">
@@ -1217,48 +1254,58 @@ export const CountryModal: React.FC<CountryModalProps> = ({
               {overviewParagraph}
             </p>
           </section>
-        </div>
-      </div>
 
-      {/* STICKY BOTTOM ACTION FOOTER (Wraps cleanly on 360px phones) */}
-      <footer className="shrink-0 border-t border-white/[0.09] bg-[#060c1a] px-3.5 py-3 sm:px-6">
-        <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                onFocusOnGlobe(country);
-                onClose();
-              }}
-              className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-white/12 bg-white/[0.06] px-3 text-xs font-semibold text-slate-200 transition-colors hover:bg-white/[0.12] hover:text-white sm:px-3.5"
-            >
-              <Compass className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
-              <span>Focus Cables</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleCopy}
-              className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-white/12 bg-white/[0.06] px-3 text-xs font-semibold text-slate-200 transition-colors hover:bg-white/[0.12] hover:text-white sm:px-3.5"
-            >
-              {copiedLocal ? (
-                <Check className="h-3.5 w-3.5 text-emerald-400" aria-hidden="true" />
-              ) : (
-                <Copy className="h-3.5 w-3.5" aria-hidden="true" />
-              )}
-              <span>{copiedLocal ? 'Copied!' : 'Copy Summary'}</span>
-            </button>
-          </div>
-
-          <a
-            href={mapsUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-sky-500 px-3.5 text-xs font-semibold text-slate-950 transition-colors hover:bg-sky-400 sm:px-4"
+          {/* Action Bar: Focus Cables, Copy Summary & Open in Google Maps */}
+          <section
+            aria-label="Country quick actions"
+            className="flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-white/[0.09] bg-[#071022]/90 p-4 sm:p-5"
           >
-            <span>Google Maps</span>
-            <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-          </a>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => onFocusOnGlobe(country)}
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/14 bg-white/[0.06] px-4 text-xs font-semibold text-slate-100 transition-colors hover:bg-white/[0.12] hover:text-white"
+              >
+                <Compass className="h-4 w-4 text-sky-400" aria-hidden="true" />
+                <span>Focus Cables on Globe</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleCopy}
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/14 bg-white/[0.06] px-4 text-xs font-semibold text-slate-100 transition-colors hover:bg-white/[0.12] hover:text-white"
+              >
+                {copiedLocal ? (
+                  <Check className="h-4 w-4 text-emerald-400" aria-hidden="true" />
+                ) : (
+                  <Copy className="h-4 w-4" aria-hidden="true" />
+                )}
+                <span>{copiedLocal ? 'Copied!' : 'Copy Summary'}</span>
+              </button>
+            </div>
+
+            <a
+              href={mapsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex h-10 items-center gap-2 rounded-xl bg-sky-500 px-4 text-xs font-semibold text-slate-950 transition-colors hover:bg-sky-400"
+            >
+              <span>Open in Google Maps</span>
+              <ExternalLink className="h-4 w-4" aria-hidden="true" />
+            </a>
+          </section>
+        </div>
+      </main>
+
+      {/* Clean Copyright Footer with Bottom Voice Clearance */}
+      <footer className="shrink-0 border-t border-white/[0.08] bg-[#050a16] pt-7 pb-28 sm:pb-24">
+        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-2 px-3.5 text-center text-xs text-slate-400 sm:flex-row sm:px-6 sm:text-left lg:px-8">
+          <p className="font-medium text-slate-200">
+            © 2026 Vidusha Nawood · Neon World Clock. All rights reserved.
+          </p>
+          <p className="tabular-clock text-slate-500">
+            {country.name} · {country.timezone}
+          </p>
         </div>
       </footer>
     </div>
