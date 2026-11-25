@@ -21,6 +21,7 @@ import {
   Star,
   Sun,
   Trophy,
+  Tv,
   UserCheck,
   UserPlus,
   X,
@@ -80,6 +81,8 @@ import { CablesPage } from './pages/CablesPage';
 import { SatellitesPage } from './pages/SatellitesPage';
 import { AlarmsPage } from './pages/AlarmsPage';
 import { ToolsPage } from './pages/ToolsPage';
+import { LiveTvPage } from './pages/LiveTvPage';
+import { getLiveTvChannelForCountry } from './data/liveTvChannels';
 
 type EntryStage = 'landing' | 'auth' | 'booting' | 'dashboard';
 
@@ -333,6 +336,13 @@ export default function App() {
     return focusedCountry;
   }, [countryByIso, focusedCountry, route]);
 
+  const activeLiveTvCountry = useMemo(() => {
+    if (route.page === 'live-tv' && route.code) {
+      return countryByIso.get(route.code.toLowerCase()) || focusedCountry;
+    }
+    return focusedCountry;
+  }, [countryByIso, focusedCountry, route]);
+
   // Single 60fps-friendly requestAnimationFrame clock loop (fires state update only on second flip)
   useEffect(() => {
     let rafId = 0;
@@ -560,6 +570,15 @@ export default function App() {
     const routeKey = JSON.stringify(route);
     if (lastAnnouncedRouteKeyRef.current === routeKey) return;
     lastAnnouncedRouteKeyRef.current = routeKey;
+
+    if (route.page === 'live-tv') {
+      if (route.code && countryByIso.has(route.code.toLowerCase())) {
+        setFocusedIso(route.code.toLowerCase());
+      }
+      // Strictly stop any National Anthem & keep Voice Assistant completely silent during Live TV
+      anthemController.stopAnthem();
+      return;
+    }
 
     if (route.page === 'country' && activeCountryPageCountry) {
       setFocusedIso(activeCountryPageCountry.iso);
@@ -1077,6 +1096,27 @@ export default function App() {
           onOpenFootballPage={(c) => navigate({ page: 'football', code: c.iso })}
           onOpenCablesPage={(c) => navigate({ page: 'cables', code: c.iso })}
           onOpenSatellitesPage={(c) => navigate({ page: 'satellites', code: c.iso })}
+          onOpenLiveTv={(c) => {
+            anthemController.stopAnthem();
+            navigate({ page: 'live-tv', code: c.iso });
+          }}
+        />
+      );
+    }
+
+    // 1B. Dedicated Full-Screen Live TV Page (#/live-tv & #/live-tv/:code)
+    if (route.page === 'live-tv') {
+      const activeChannel = getLiveTvChannelForCountry(activeLiveTvCountry);
+      return renderDedicatedSubPage(
+        `Live TV · ${activeLiveTvCountry.name}`,
+        `${activeChannel.channelName} · Public Live Broadcast`,
+        <LiveTvPage
+          countries={COUNTRIES}
+          selectedCountry={activeLiveTvCountry}
+          displayDate={displayDate}
+          is24Hour={is24Hour}
+          onSelectCountryCode={(iso) => navigate({ page: 'live-tv', code: iso })}
+          onOpenCountryPage={handleOpenCountryPage}
         />
       );
     }
@@ -1823,6 +1863,24 @@ export default function App() {
 
             <button
               type="button"
+              onClick={() => handleMenuNavigate({ page: 'live-tv', code: focusedCountry.iso })}
+              className={`flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left text-sm font-semibold transition-colors ${
+                route.page === 'live-tv'
+                  ? 'border-rose-400/50 bg-rose-500/18 text-white'
+                  : 'border-white/[0.07] bg-white/[0.03] text-slate-200 hover:border-rose-400/35 hover:bg-white/[0.07]'
+              }`}
+            >
+              <Tv className="h-4 w-4 shrink-0 text-rose-400" aria-hidden="true" />
+              <div className="min-w-0">
+                <p>Live TV Broadcast</p>
+                <p className="truncate text-[11px] font-normal text-slate-400">
+                  {focusedCountry.name} &amp; {COUNTRIES.length} global live channels
+                </p>
+              </div>
+            </button>
+
+            <button
+              type="button"
               onClick={() => handleMenuNavigate({ page: 'football', code: focusedCountry.iso })}
               className={`flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left text-sm font-semibold transition-colors ${
                 route.page === 'football'
@@ -2166,10 +2224,11 @@ export default function App() {
         </>
       )}
 
-      {/* On-Demand AI Voice Assistant (Speaks only on navigation/click; silent during National Anthem) */}
+      {/* On-Demand AI Voice Assistant (Speaks only on navigation/click; silent during National Anthem & Live TV) */}
       <ContinuousVoiceNarrator
         interruptSignal={voiceInterrupt}
         isAnthemPlaying={isAnthemPlaying}
+        isLiveTvActive={route.page === 'live-tv'}
       />
     </>
   );

@@ -29,6 +29,7 @@ import {
   Sunrise,
   Sunset,
   Trophy,
+  Tv,
   Users,
   Volume2,
   Wifi,
@@ -42,6 +43,7 @@ import {
   getCountryTradeProfile,
 } from '../data/tradeAndBrands';
 import { getCountryOverviewParagraph } from '../data/countryOverviews';
+import { getLiveTvChannelForCountry } from '../data/liveTvChannels';
 import {
   getOverheadSatellitesForCountry,
   type LiveSatellite,
@@ -90,6 +92,7 @@ interface CountryModalProps {
   onOpenFootballPage?: (country: Country) => void;
   onOpenCablesPage?: (country: Country) => void;
   onOpenSatellitesPage?: (country: Country) => void;
+  onOpenLiveTv?: (country: Country) => void;
 }
 
 function getInitials(name: string): string {
@@ -126,6 +129,7 @@ export const CountryModal: React.FC<CountryModalProps> = ({
   onOpenFootballPage,
   onOpenCablesPage,
   onOpenSatellitesPage,
+  onOpenLiveTv,
 }) => {
   const footballSectionRef = useRef<HTMLElement | null>(null);
   const [amountInput, setAmountInput] = useState<string>('100');
@@ -1294,6 +1298,71 @@ export const CountryModal: React.FC<CountryModalProps> = ({
               <ExternalLink className="h-4 w-4" aria-hidden="true" />
             </a>
           </section>
+
+          {/* 9. WATCH LIVE TV — Prominent Neon Glassmorphism Action Card at Very Bottom of Every Country Page */}
+          {onOpenLiveTv && (() => {
+            const liveChannel = getLiveTvChannelForCountry(country);
+            return (
+              <section
+                aria-label={`Watch ${country.name} Live TV`}
+                className="relative overflow-hidden rounded-3xl border border-cyan-400/35 bg-gradient-to-r from-[#08162f]/95 via-[#0a1c3a]/95 to-[#0c1430]/95 p-5 shadow-[0_18px_50px_-20px_rgba(14,165,233,0.55)] backdrop-blur-xl sm:p-6"
+              >
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute -top-20 -right-20 h-56 w-56 rounded-full bg-cyan-500/15 blur-3xl"
+                />
+                <div className="relative flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+                  <div className="flex min-w-0 items-center gap-4">
+                    <div className="relative shrink-0">
+                      {flagValid ? (
+                        <img
+                          src={flagUrl}
+                          alt={`Flag of ${country.name}`}
+                          referrerPolicy="no-referrer"
+                          className="h-12 w-18 rounded-xl object-cover ring-1 ring-cyan-300/35"
+                        />
+                      ) : (
+                        <div className="flex h-12 w-18 items-center justify-center rounded-xl border border-cyan-400/30 bg-slate-900 text-xs font-bold text-cyan-300">
+                          {country.iso.toUpperCase()}
+                        </div>
+                      )}
+                      <span className="absolute -right-1.5 -bottom-1.5 flex h-6 w-6 items-center justify-center rounded-lg border border-rose-400/50 bg-[#050a18] text-rose-400 shadow-md">
+                        <Tv className="h-3.5 w-3.5" aria-hidden="true" />
+                      </span>
+                    </div>
+
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="inline-flex items-center gap-1.5 rounded-md border border-rose-500/40 bg-rose-500/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-rose-200">
+                          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-rose-400" aria-hidden="true" />
+                          Live Broadcast
+                        </span>
+                        <span className="truncate text-xs font-medium text-cyan-300">
+                          {liveChannel.category} · {liveChannel.language}
+                        </span>
+                      </div>
+                      <h3 className="mt-1 truncate text-base font-bold text-white sm:text-lg">
+                        {liveChannel.channelName}
+                      </h3>
+                      <p className="truncate text-xs text-slate-300">
+                        Stream {country.name} live television on a dedicated full-screen broadcast page
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => onOpenLiveTv(country)}
+                    className="inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-cyan-400 via-sky-400 to-blue-500 px-6 text-sm font-bold text-slate-950 shadow-[0_0_28px_-6px_rgba(56,189,248,0.85)] transition-all hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 whitespace-nowrap"
+                  >
+                    <Tv className="h-4.5 w-4.5" aria-hidden="true" />
+                    <span>Watch Live TV</span>
+                    <ArrowUpRight className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                </div>
+              </section>
+            );
+          })()}
         </div>
       </main>
 

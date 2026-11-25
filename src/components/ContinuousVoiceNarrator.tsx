@@ -10,6 +10,7 @@ export interface VoiceInterruptSignal {
 interface ContinuousVoiceNarratorProps {
   interruptSignal: VoiceInterruptSignal | null;
   isAnthemPlaying: boolean;
+  isLiveTvActive?: boolean;
   elevatedOffset?: boolean;
 }
 
@@ -47,6 +48,7 @@ function selectPreferredVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVo
 export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = ({
   interruptSignal,
   isAnthemPlaying,
+  isLiveTvActive = false,
   elevatedOffset = false,
 }) => {
   const isSupported = typeof window !== 'undefined' && 'speechSynthesis' in window;
@@ -61,6 +63,9 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
   const isAnthemPlayingRef = useRef<boolean>(isAnthemPlaying);
   isAnthemPlayingRef.current = isAnthemPlaying;
   const prevAnthemPlayingRef = useRef<boolean>(isAnthemPlaying);
+
+  const isLiveTvActiveRef = useRef<boolean>(isLiveTvActive);
+  isLiveTvActiveRef.current = isLiveTvActive;
 
   const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
   const queueRef = useRef<NarrationLine[]>([]);
@@ -95,7 +100,7 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
 
   const speakLine = useCallback(
     (line: NarrationLine) => {
-      if (!isSupported) return;
+      if (!isSupported || isLiveTvActiveRef.current) return;
 
       // Never talk over an actively playing National Anthem — hold at front of queue
       if (isAnthemPlayingRef.current) {
@@ -192,7 +197,7 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
   );
 
   const speakNextFromQueue = useCallback(() => {
-    if (isAnthemPlayingRef.current) return;
+    if (isAnthemPlayingRef.current || isLiveTvActiveRef.current) return;
     const next = queueRef.current.shift();
     if (next) {
       setHasQueuedForAnthem(false);
@@ -229,15 +234,22 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
     }
 
     // Anthem just finished / paused / stopped / errored -> resume queued country details if any
-    if (wasPlaying && !isAnthemPlaying && queueRef.current.length > 0) {
+    if (wasPlaying && !isAnthemPlaying && !isLiveTvActiveRef.current && queueRef.current.length > 0) {
       clearPendingTimer();
       nextTimerRef.current = window.setTimeout(() => {
-        if (!isAnthemPlayingRef.current && queueRef.current.length > 0) {
+        if (!isAnthemPlayingRef.current && !isLiveTvActiveRef.current && queueRef.current.length > 0) {
           speakNextFromQueue();
         }
       }, 340);
     }
   }, [clearPendingTimer, isAnthemPlaying, isSupported, speakNextFromQueue]);
+
+  // Strict Live TV Silence: immediately cancel speech & clear pending queue whenever Live TV opens
+  useEffect(() => {
+    if (isLiveTvActive) {
+      stopSpeechCleanly();
+    }
+  }, [isLiveTvActive, stopSpeechCleanly]);
 
   // Load browser speech voices cleanly
   useEffect(() => {
@@ -274,6 +286,10 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
     if (interruptSignal.id === lastInterruptIdRef.current) return;
     lastInterruptIdRef.current = interruptSignal.id;
 
+    if (isLiveTvActiveRef.current) {
+      return;
+    }
+
     lastBatchRef.current = [...interruptSignal.lines];
     queueRef.current = [...interruptSignal.lines];
 
@@ -289,7 +305,7 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
 
   const handleReplayBatch = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (isAnthemPlayingRef.current) return;
+    if (isAnthemPlayingRef.current || isLiveTvActiveRef.current) return;
     if (lastBatchRef.current.length > 0) {
       queueRef.current = [...lastBatchRef.current];
       speakNextFromQueue();
@@ -301,9 +317,9 @@ export const ContinuousVoiceNarrator: React.FC<ContinuousVoiceNarratorProps> = (
     stopSpeechCleanly();
   };
 
-  if (!isSupported) return null;
+  if (!isSupported || isLiveTvActive) return null;
 
-  const canReplay = lastBatchRef.current.length > 0 && !isAnthemPlaying;
+  const canReplay = lastBatchRef.current.length > 0 && !isAnthemPlaying && !isLiveTvActive;
 
   return (
     <aside

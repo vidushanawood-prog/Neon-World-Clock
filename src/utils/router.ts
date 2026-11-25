@@ -9,7 +9,8 @@ export type AppRoute =
   | { page: 'satellites'; code?: string }
   | { page: 'alarms' }
   | { page: 'tools'; tab?: 'settings' | 'jetlag' | 'compare' }
-  | { page: 'dashboard' };
+  | { page: 'dashboard' }
+  | { page: 'live-tv'; code?: string };
 
 export function parseHashRoute(rawHash: string): AppRoute {
   const cleaned = rawHash.replace(/^#/, '').trim();
@@ -52,6 +53,8 @@ export function parseHashRoute(rawHash: string): AppRoute {
     }
     case 'dashboard':
       return { page: 'dashboard' };
+    case 'live-tv':
+      return { page: 'live-tv', code: param || undefined };
     default:
       return { page: 'home' };
   }
@@ -83,6 +86,10 @@ export function routeToHash(route: AppRoute): string {
       return route.tab ? `#/tools?tab=${route.tab}` : '#/tools';
     case 'dashboard':
       return '#/dashboard';
+    case 'live-tv':
+      return route.code
+        ? `#/live-tv/${encodeURIComponent(route.code.toLowerCase())}`
+        : '#/live-tv';
   }
 }
 
