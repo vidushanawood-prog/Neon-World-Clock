@@ -22,6 +22,7 @@ import {
   Moon,
   Package,
   Phone,
+  Radio,
   Satellite,
   Shield,
   Star,
@@ -93,6 +94,7 @@ interface CountryModalProps {
   onOpenCablesPage?: (country: Country) => void;
   onOpenSatellitesPage?: (country: Country) => void;
   onOpenLiveTv?: (country: Country) => void;
+  onOpenLiveRadio?: (country: Country) => void;
 }
 
 function getInitials(name: string): string {
@@ -130,6 +132,7 @@ export const CountryModal: React.FC<CountryModalProps> = ({
   onOpenCablesPage,
   onOpenSatellitesPage,
   onOpenLiveTv,
+  onOpenLiveRadio,
 }) => {
   const footballSectionRef = useRef<HTMLElement | null>(null);
   const [amountInput, setAmountInput] = useState<string>('100');
@@ -1363,6 +1366,68 @@ export const CountryModal: React.FC<CountryModalProps> = ({
               </section>
             );
           })()}
+
+          {/* 10. LISTEN TO LIVE RADIO — Stacked Directly Below Watch Live TV */}
+          {onOpenLiveRadio && (
+            <section
+              aria-label={`Listen to ${country.name} Live Radio`}
+              className="relative overflow-hidden rounded-3xl border border-emerald-400/35 bg-gradient-to-r from-[#071a26]/95 via-[#08222e]/95 to-[#071828]/95 p-5 shadow-[0_18px_50px_-20px_rgba(16,185,129,0.5)] backdrop-blur-xl sm:p-6"
+            >
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute -top-20 -right-20 h-56 w-56 rounded-full bg-emerald-500/15 blur-3xl"
+              />
+              <div className="relative flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+                <div className="flex min-w-0 items-center gap-4">
+                  <div className="relative shrink-0">
+                    {flagValid ? (
+                      <img
+                        src={flagUrl}
+                        alt={`Flag of ${country.name}`}
+                        referrerPolicy="no-referrer"
+                        className="h-12 w-18 rounded-xl object-cover ring-1 ring-emerald-300/35"
+                      />
+                    ) : (
+                      <div className="flex h-12 w-18 items-center justify-center rounded-xl border border-emerald-400/30 bg-slate-900 text-xs font-bold text-emerald-300">
+                        {country.iso.toUpperCase()}
+                      </div>
+                    )}
+                    <span className="absolute -right-1.5 -bottom-1.5 flex h-6 w-6 items-center justify-center rounded-lg border border-emerald-400/50 bg-[#050a18] text-emerald-400 shadow-md">
+                      <Radio className="h-3.5 w-3.5" aria-hidden="true" />
+                    </span>
+                  </div>
+
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="inline-flex items-center gap-1.5 rounded-md border border-emerald-400/40 bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-emerald-200">
+                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" aria-hidden="true" />
+                        Live Radio Directory
+                      </span>
+                      <span className="truncate text-xs font-medium text-emerald-300">
+                        All Online FM &amp; Web Stations · {country.language}
+                      </span>
+                    </div>
+                    <h3 className="mt-1 truncate text-base font-bold text-white sm:text-lg">
+                      {country.name} Live Radio Channels
+                    </h3>
+                    <p className="truncate text-xs text-slate-300">
+                      Browse and stream all available public online radio stations from {country.name}
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => onOpenLiveRadio(country)}
+                  className="inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-400 via-teal-400 to-cyan-400 px-6 text-sm font-bold text-slate-950 shadow-[0_0_28px_-6px_rgba(16,185,129,0.85)] transition-all hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300 whitespace-nowrap"
+                >
+                  <Radio className="h-4.5 w-4.5" aria-hidden="true" />
+                  <span>Listen to Live Radio</span>
+                  <ArrowUpRight className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </div>
+            </section>
+          )}
         </div>
       </main>
 

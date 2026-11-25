@@ -10,7 +10,8 @@ export type AppRoute =
   | { page: 'alarms' }
   | { page: 'tools'; tab?: 'settings' | 'jetlag' | 'compare' }
   | { page: 'dashboard' }
-  | { page: 'live-tv'; code?: string };
+  | { page: 'live-tv'; code?: string }
+  | { page: 'live-radio'; code?: string };
 
 export function parseHashRoute(rawHash: string): AppRoute {
   const cleaned = rawHash.replace(/^#/, '').trim();
@@ -55,6 +56,8 @@ export function parseHashRoute(rawHash: string): AppRoute {
       return { page: 'dashboard' };
     case 'live-tv':
       return { page: 'live-tv', code: param || undefined };
+    case 'live-radio':
+      return { page: 'live-radio', code: param || undefined };
     default:
       return { page: 'home' };
   }
@@ -90,6 +93,10 @@ export function routeToHash(route: AppRoute): string {
       return route.code
         ? `#/live-tv/${encodeURIComponent(route.code.toLowerCase())}`
         : '#/live-tv';
+    case 'live-radio':
+      return route.code
+        ? `#/live-radio/${encodeURIComponent(route.code.toLowerCase())}`
+        : '#/live-radio';
   }
 }
 

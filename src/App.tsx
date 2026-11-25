@@ -15,6 +15,7 @@ import {
   Moon,
   Orbit,
   Plane,
+  Radio,
   RotateCcw,
   Search,
   SlidersHorizontal,
@@ -82,6 +83,7 @@ import { SatellitesPage } from './pages/SatellitesPage';
 import { AlarmsPage } from './pages/AlarmsPage';
 import { ToolsPage } from './pages/ToolsPage';
 import { LiveTvPage } from './pages/LiveTvPage';
+import { LiveRadioPage } from './pages/LiveRadioPage';
 import { getLiveTvChannelForCountry } from './data/liveTvChannels';
 
 type EntryStage = 'landing' | 'auth' | 'booting' | 'dashboard';
@@ -343,6 +345,13 @@ export default function App() {
     return focusedCountry;
   }, [countryByIso, focusedCountry, route]);
 
+  const activeLiveRadioCountry = useMemo(() => {
+    if (route.page === 'live-radio' && route.code) {
+      return countryByIso.get(route.code.toLowerCase()) || focusedCountry;
+    }
+    return focusedCountry;
+  }, [countryByIso, focusedCountry, route]);
+
   // Single 60fps-friendly requestAnimationFrame clock loop (fires state update only on second flip)
   useEffect(() => {
     let rafId = 0;
@@ -571,11 +580,11 @@ export default function App() {
     if (lastAnnouncedRouteKeyRef.current === routeKey) return;
     lastAnnouncedRouteKeyRef.current = routeKey;
 
-    if (route.page === 'live-tv') {
+    if (route.page === 'live-tv' || route.page === 'live-radio') {
       if (route.code && countryByIso.has(route.code.toLowerCase())) {
         setFocusedIso(route.code.toLowerCase());
       }
-      // Strictly stop any National Anthem & keep Voice Assistant completely silent during Live TV
+      // Strictly stop any National Anthem & keep Voice Assistant completely silent during Live TV / Live Radio
       anthemController.stopAnthem();
       return;
     }
@@ -1100,6 +1109,10 @@ export default function App() {
             anthemController.stopAnthem();
             navigate({ page: 'live-tv', code: c.iso });
           }}
+          onOpenLiveRadio={(c) => {
+            anthemController.stopAnthem();
+            navigate({ page: 'live-radio', code: c.iso });
+          }}
         />
       );
     }
@@ -1117,6 +1130,26 @@ export default function App() {
           is24Hour={is24Hour}
           onSelectCountryCode={(iso) => navigate({ page: 'live-tv', code: iso })}
           onOpenCountryPage={handleOpenCountryPage}
+        />
+      );
+    }
+
+    // 1C. Dedicated Full-Screen Live Radio Page (#/live-radio & #/live-radio/:code)
+    if (route.page === 'live-radio') {
+      return renderDedicatedSubPage(
+        `Live Radio · ${activeLiveRadioCountry.name}`,
+        'Online FM & public internet radio stations worldwide',
+        <LiveRadioPage
+          countries={COUNTRIES}
+          selectedCountry={activeLiveRadioCountry}
+          displayDate={displayDate}
+          is24Hour={is24Hour}
+          onSelectCountryCode={(iso) => navigate({ page: 'live-radio', code: iso })}
+          onOpenCountryPage={handleOpenCountryPage}
+          onOpenLiveTvPage={(c) => {
+            anthemController.stopAnthem();
+            navigate({ page: 'live-tv', code: c.iso });
+          }}
         />
       );
     }
@@ -1872,9 +1905,27 @@ export default function App() {
             >
               <Tv className="h-4 w-4 shrink-0 text-rose-400" aria-hidden="true" />
               <div className="min-w-0">
-                <p>Live TV Broadcast</p>
+                <p>Live TV</p>
                 <p className="truncate text-[11px] font-normal text-slate-400">
                   {focusedCountry.name} &amp; {COUNTRIES.length} global live channels
+                </p>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleMenuNavigate({ page: 'live-radio', code: focusedCountry.iso })}
+              className={`flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left text-sm font-semibold transition-colors ${
+                route.page === 'live-radio'
+                  ? 'border-emerald-400/50 bg-emerald-500/18 text-white'
+                  : 'border-white/[0.07] bg-white/[0.03] text-slate-200 hover:border-emerald-400/35 hover:bg-white/[0.07]'
+              }`}
+            >
+              <Radio className="h-4 w-4 shrink-0 text-emerald-400" aria-hidden="true" />
+              <div className="min-w-0">
+                <p>Live Radio</p>
+                <p className="truncate text-[11px] font-normal text-slate-400">
+                  {focusedCountry.name} &amp; worldwide online radio stations
                 </p>
               </div>
             </button>
@@ -2224,11 +2275,11 @@ export default function App() {
         </>
       )}
 
-      {/* On-Demand AI Voice Assistant (Speaks only on navigation/click; silent during National Anthem & Live TV) */}
+      {/* On-Demand AI Voice Assistant (Speaks only on navigation/click; silent during National Anthem, Live TV & Live Radio) */}
       <ContinuousVoiceNarrator
         interruptSignal={voiceInterrupt}
         isAnthemPlaying={isAnthemPlaying}
-        isLiveTvActive={route.page === 'live-tv'}
+        isLiveTvActive={route.page === 'live-tv' || route.page === 'live-radio'}
       />
     </>
   );
