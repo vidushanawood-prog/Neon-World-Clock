@@ -47,9 +47,17 @@ import {
 import { estimateIssPosition, fetchIssPosition, type IssPosition } from './services/iss';
 import { propagateSatellites } from './services/satellites';
 import { playAlarmChime, playHourlyChime } from './utils/audio';
+import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
+import {
+  auth,
+  isFirebaseConfigured,
+  sanitizeDisplayName,
+  syncVerifiedUserProfile,
+} from './lib/firebase';
 import {
   clearActiveSession,
   getActiveSession,
+  saveActiveSession,
   type AuthSession,
 } from './utils/auth';
 import { useHashRoute, type AppRoute } from './utils/router';
@@ -84,6 +92,7 @@ import { AlarmsPage } from './pages/AlarmsPage';
 import { ToolsPage } from './pages/ToolsPage';
 import { LiveTvPage } from './pages/LiveTvPage';
 import { LiveRadioPage } from './pages/LiveRadioPage';
+import { AccountPage } from './pages/AccountPage';
 import { getLiveTvChannelForCountry } from './data/liveTvChannels';
 
 type EntryStage = 'landing' | 'auth' | 'booting' | 'dashboard';
@@ -214,11 +223,15 @@ export default function App() {
     []
   );
 
-  // Cinematic Entry Sequence & Client-Side SHA-256 Session State
+  // Cinematic Entry Sequence & Firebase / Local Session State
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [authSession, setAuthSession] = useState<AuthSession | null>(() => getActiveSession());
-  const [entryStage, setEntryStage] = useState<EntryStage>(() =>
-    getActiveSession() ? 'dashboard' : 'landing'
-  );
+  const [entryStage, setEntryStage] = useState<EntryStage>(() => {
+    if (typeof window !== 'undefined' && window.location.hash.toLowerCase().startsWith('#/account')) {
+      return 'dashboard';
+    }
+    return getActiveSession() ? 'dashboard' : 'landing';
+  });
 
   // Synchronized live clock driven by single rAF second-flip loop
   const [now, setNow] = useState<Date>(() => new Date());
@@ -379,6 +392,33 @@ export default function App() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // Subscribe to Firebase Authentication state so verified accounts persist across refreshes
+  useEffect(() => {
+    if (!isFirebaseConfigured || !auth) return;
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setFirebaseUser(user);
+      if (user && user.emailVerified && user.email) {
+        const displayName = sanitizeDisplayName(user.displayName, user.email);
+        const syncedSession: AuthSession = {
+          uid: user.uid,
+          email: user.email.toLowerCase(),
+          displayName,
+          emailVerified: true,
+          loggedInAt: new Date().toISOString(),
+          provider: 'firebase',
+        };
+        saveActiveSession(syncedSession);
+        setAuthSession(syncedSession);
+        setEntryStage((prev) => (prev === 'landing' ? 'dashboard' : prev));
+        // Merge verified profile into Firestore users/{uid} without blocking UI
+        void syncVerifiedUserProfile(user, displayName).catch(() => {
+          // Handled via structured handleFirestoreError logger
+        });
+      }
+    });
+    return () => unsubscribe();
   }, []);
 
   // Poll live ISS position every 6 seconds (graceful orbital fallback if offline)
@@ -947,9 +987,17 @@ export default function App() {
     );
   }, [showToast, triggerVoicePanel]);
 
-  const handleLogout = useCallback(() => {
+  const handleLogout = useCallback(async () => {
     anthemController.stopAnthem();
+    if (isFirebaseConfigured && auth) {
+      try {
+        await signOut(auth);
+      } catch {
+        // Continue local cleanup cleanly
+      }
+    }
     clearActiveSession();
+    setFirebaseUser(null);
     setAuthSession(null);
     setMenuOpen(false);
     setRingingAlarm(null);
@@ -1296,8 +1344,31 @@ export default function App() {
           onToggleTempUnit={() => setTempUnit((u) => (u === 'C' ? 'F' : 'C'))}
           onToggleTheme={() => setIsDark((d) => !d)}
           onToggleHourlyChime={() => setHourlyChimeEnabled((v) => !v)}
-          onSwitchAccount={() => setEntryStage('auth')}
+          onSwitchAccount={() => navigate({ page: 'account' })}
           onLogout={handleLogout}
+        />
+      );
+    }
+
+    // 8B. Dedicated Full-Screen Firebase Account Page (#/account)
+    if (route.page === 'account') {
+      return renderDedicatedSubPage(
+        'Account · Sign Up & Sign In',
+        'Firebase Email & Password authentication, email verification & Firestore profile',
+        <AccountPage
+          session={authSession}
+          firebaseUser={firebaseUser}
+          onSessionVerified={(verifiedSession) => {
+            setAuthSession(verifiedSession);
+            setEntryStage('dashboard');
+            showToast(
+              'Account Verified',
+              `Signed in as ${verifiedSession.displayName || verifiedSession.email}`
+            );
+          }}
+          onSignOut={handleLogout}
+          onOpenDashboard={() => navigate({ page: 'dashboard' })}
+          onBackToGlobe={() => navigate({ page: 'home' })}
         />
       );
     }
@@ -2128,11 +2199,12 @@ export default function App() {
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  setMenuOpen(false);
-                  setEntryStage('auth');
-                }}
-                className="inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border border-sky-400/35 bg-sky-500/15 px-3 text-xs font-semibold text-sky-200 transition-colors hover:bg-sky-500/25 hover:text-white"
+                onClick={() => handleMenuNavigate({ page: 'account' })}
+                className={`inline-flex h-10 items-center justify-center gap-1.5 rounded-xl border px-3 text-xs font-semibold transition-colors ${
+                  route.page === 'account'
+                    ? 'border-cyan-400/55 bg-cyan-500/20 text-white'
+                    : 'border-sky-400/35 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25 hover:text-white'
+                }`}
               >
                 <UserPlus className="h-3.5 w-3.5" aria-hidden="true" />
                 <span>Sign In / Up</span>

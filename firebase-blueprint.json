@@ -1,0 +1,54 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Verified Neon World Clock user profile stored at users/{uid}. Never stores plaintext passwords.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Authentication user UID matching the document ID."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 254,
+          "description": "Verified email address matching request.auth.token.email."
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "User display name shown in Neon World Clock."
+        },
+        "emailVerified": {
+          "type": "boolean",
+          "description": "Verification status; must be true on verified profile persistence."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable Firestore server timestamp recorded when the profile was first created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Firestore server timestamp recorded when the profile was last updated."
+        }
+      },
+      "required": ["uid", "email", "displayName", "emailVerified", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
+      "description": "Verified user profile documents isolated strictly to the owning authenticated user."
+    }
+  }
+}

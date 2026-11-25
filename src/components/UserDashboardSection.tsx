@@ -98,21 +98,30 @@ export const UserDashboardSection: React.FC<UserDashboardSectionProps> = ({
               vidushanawood Account · User Dashboard
             </p>
             <h2 className="mt-0.5 truncate text-xl font-bold tracking-tight text-white sm:text-2xl">
-              {session ? session.email : 'Operator Profile'}
+              {session?.displayName || session?.email || 'Operator Profile'}
             </h2>
+            {session?.displayName && (
+              <p className="truncate text-xs text-slate-300">{session.email}</p>
+            )}
             <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400">
               <span className="inline-flex items-center gap-1 text-emerald-300">
                 <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
-                SHA-256 Local Vault Active
+                {session?.provider === 'firebase' && session.emailVerified
+                  ? 'Firebase Verified · Firestore Synced'
+                  : 'SHA-256 Local Vault Active'}
               </span>
               <span aria-hidden="true">·</span>
               <span>Signed in {signedInAtLabel}</span>
-              <span aria-hidden="true" className="hidden sm:inline">
-                ·
-              </span>
-              <span className="hidden sm:inline">
-                {totalLocalAccounts} saved {totalLocalAccounts === 1 ? 'account' : 'accounts'} on device
-              </span>
+              {session?.provider !== 'firebase' && (
+                <>
+                  <span aria-hidden="true" className="hidden sm:inline">
+                    ·
+                  </span>
+                  <span className="hidden sm:inline">
+                    {totalLocalAccounts} saved {totalLocalAccounts === 1 ? 'account' : 'accounts'} on device
+                  </span>
+                </>
+              )}
             </p>
           </div>
         </div>

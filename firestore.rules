@@ -1,0 +1,91 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Default-deny all unmatched paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reusable Hardened Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // Validation Blueprint for UserProfile (/users/{uid})
+    // Mirrors firebase-blueprint.json maxLength & pattern constraints verbatim
+    function isValidUserProfile(data, uid) {
+      return (
+        data.keys().hasAll(['uid', 'email', 'displayName', 'emailVerified', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'displayName', 'emailVerified', 'createdAt', 'updatedAt']) &&
+        data.uid is string &&
+        isValidId(data.uid) &&
+        data.uid == request.auth.uid &&
+        data.uid == uid &&
+        data.email is string &&
+        data.email.size() >= 3 &&
+        data.email.size() <= 254 &&
+        request.auth.token.email is string &&
+        data.email.lower() == request.auth.token.email.lower() &&
+        data.displayName is string &&
+        data.displayName.size() >= 1 &&
+        data.displayName.size() <= 80 &&
+        data.emailVerified is bool &&
+        data.emailVerified == true &&
+        data.createdAt is timestamp &&
+        (!('updatedAt' in data) || data.updatedAt is timestamp)
+      );
+    }
+
+    // Verified User Profiles (PII strictly isolated to document owner)
+    match /users/{uid} {
+      // Only the owning authenticated user can read their own profile
+      allow get: if isSignedIn() && isValidId(uid) && isOwner(uid);
+
+      // Never allow scraping/listing user emails or profiles
+      allow list: if false;
+
+      // Only verified owner may create their own profile with server timestamp & strict schema
+      allow create: if isVerifiedUser() &&
+        isValidId(uid) &&
+        isOwner(uid) &&
+        isValidUserProfile(incoming(), uid) &&
+        incoming().createdAt == request.time &&
+        (!('updatedAt' in incoming()) || incoming().updatedAt == request.time);
+
+      // Action-Based Update: Verified owner may update displayName / synced email / updatedAt only; uid & createdAt immutable
+      allow update: if isVerifiedUser() &&
+        isValidId(uid) &&
+        isOwner(uid) &&
+        isValidUserProfile(incoming(), uid) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        (
+          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'emailVerified', 'updatedAt']) &&
+          (!('updatedAt' in incoming()) || incoming().updatedAt == request.time)
+        );
+
+      // Verified owner may delete their own profile document
+      allow delete: if isVerifiedUser() && isValidId(uid) && isOwner(uid);
+    }
+  }
+}

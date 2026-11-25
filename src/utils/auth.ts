@@ -15,6 +15,10 @@ export interface StoredUserRecord {
 export interface AuthSession {
   email: string;
   loggedInAt: string;
+  uid?: string;
+  displayName?: string;
+  emailVerified?: boolean;
+  provider?: 'firebase' | 'local';
 }
 
 export interface PasswordStrength {
@@ -215,7 +219,14 @@ export function getActiveSession(): AuthSession | null {
       isValidEmail(parsed.email) &&
       typeof parsed.loggedInAt === 'string'
     ) {
-      return { email: normalizeEmail(parsed.email), loggedInAt: parsed.loggedInAt };
+      return {
+        email: normalizeEmail(parsed.email),
+        loggedInAt: parsed.loggedInAt,
+        uid: typeof parsed.uid === 'string' ? parsed.uid : undefined,
+        displayName: typeof parsed.displayName === 'string' ? parsed.displayName : undefined,
+        emailVerified: typeof parsed.emailVerified === 'boolean' ? parsed.emailVerified : undefined,
+        provider: parsed.provider === 'firebase' || parsed.provider === 'local' ? parsed.provider : undefined,
+      };
     }
     return null;
   } catch {
