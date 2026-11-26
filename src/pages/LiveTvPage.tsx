@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import {
+  AlertTriangle,
   ArrowUpRight,
   ExternalLink,
+  Layers,
   Maximize,
   Minimize,
   Pause,
@@ -56,7 +58,13 @@ export const LiveTvPage: React.FC<LiveTvPageProps> = ({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
 
+  const isEmbedChannel = Boolean(channel.preferEmbed && channel.embedUrl);
+
   const [streamMode, setStreamMode] = useState<'primary' | 'backup'>('primary');
+  const [embedSource, setEmbedSource] = useState<'primary' | 'portal'>('primary');
+  const [embedLoaded, setEmbedLoaded] = useState<boolean>(false);
+  const [embedError, setEmbedError] = useState<boolean>(false);
+  const [showEmbedFallback, setShowEmbedFallback] = useState<boolean>(false);
   const [retryNonce, setRetryNonce] = useState<number>(0);
   const [status, setStatus] = useState<StreamStatus>('connecting');
   const [errorReason, setErrorReason] = useState<string | null>(null);
@@ -71,13 +79,35 @@ export const LiveTvPage: React.FC<LiveTvPageProps> = ({
   const volumeRef = useRef<number>(volume);
   volumeRef.current = volume;
 
-  // Reset stream mode to primary whenever country changes
+  // Reset player state whenever country changes
   useEffect(() => {
     setStreamMode('primary');
+    setEmbedSource('primary');
+    setEmbedLoaded(false);
+    setEmbedError(false);
+    setShowEmbedFallback(false);
     setStatus('connecting');
     setErrorReason(null);
     setAutoplayMutedNotice(false);
   }, [selectedCountry.iso]);
+
+  const activeEmbedUrl =
+    embedSource === 'portal' && channel.secondaryEmbedUrl
+      ? channel.secondaryEmbedUrl
+      : channel.embedUrl || channel.officialUrl;
+
+  // Watchdog for embedded player: if an embed fails to signal load within 11s, offer graceful in-app recovery
+  useEffect(() => {
+    if (!isEmbedChannel || showEmbedFallback) return;
+    setEmbedLoaded(false);
+    setEmbedError(false);
+
+    const timer = window.setTimeout(() => {
+      setEmbedError(true);
+    }, 11000);
+
+    return () => window.clearTimeout(timer);
+  }, [isEmbedChannel, activeEmbedUrl, retryNonce, showEmbedFallback]);
 
   const activeStreamUrl =
     streamMode === 'primary' ? channel.hlsUrl : channel.fallbackHlsUrl;
@@ -112,6 +142,7 @@ export const LiveTvPage: React.FC<LiveTvPageProps> = ({
 
   // Attach HLS.js (or native Safari HLS) with automatic failover & strict cleanup
   useEffect(() => {
+    if (isEmbedChannel || !activeStreamUrl) return;
     const video = videoRef.current;
     if (!video) return;
 
@@ -271,7 +302,7 @@ export const LiveTvPage: React.FC<LiveTvPageProps> = ({
         // Ignore
       }
     };
-  }, [activeStreamUrl, channel.fallbackHlsUrl, channel.hlsUrl, streamMode, retryNonce, attemptVideoPlayback]);
+  }, [isEmbedChannel, activeStreamUrl, channel.fallbackHlsUrl, channel.hlsUrl, streamMode, retryNonce, attemptVideoPlayback]);
 
   // Keep fullscreen state synced with browser fullscreen events
   useEffect(() => {
@@ -352,9 +383,24 @@ export const LiveTvPage: React.FC<LiveTvPageProps> = ({
   };
 
   const handleRetryPrimary = () => {
+    if (isEmbedChannel) {
+      setShowEmbedFallback(false);
+      setEmbedError(false);
+      setEmbedLoaded(false);
+      setRetryNonce((n) => n + 1);
+      return;
+    }
     setStreamMode('primary');
     setErrorReason(null);
     setStatus('connecting');
+    setRetryNonce((n) => n + 1);
+  };
+
+  const handleSwitchEmbedSource = (target?: 'primary' | 'portal') => {
+    setShowEmbedFallback(false);
+    setEmbedError(false);
+    setEmbedLoaded(false);
+    setEmbedSource((prev) => target ?? (prev === 'primary' ? 'portal' : 'primary'));
     setRetryNonce((n) => n + 1);
   };
 
@@ -455,206 +501,410 @@ export const LiveTvPage: React.FC<LiveTvPageProps> = ({
         className="overflow-hidden rounded-3xl border border-sky-400/35 bg-[#040814] shadow-[0_24px_64px_-22px_rgba(14,165,233,0.45)]"
       >
         <div className="relative aspect-video w-full bg-black">
-          <video
-            ref={videoRef}
-            playsInline
-            controls={false}
-            onClick={handleTogglePlay}
-            className="h-full w-full cursor-pointer object-contain bg-black"
-          />
+          {isEmbedChannel ? (
+            <>
+              {!showEmbedFallback ? (
+                <>
+                  <iframe
+                    key={`${selectedCountry.iso}-${embedSource}-${retryNonce}`}
+                    src={activeEmbedUrl}
+                    title={`${channel.channelName} Live Stream`}
+                    allow="autoplay; fullscreen; picture-in-picture; encrypted-media"
+                    allowFullScreen
+                    referrerPolicy="no-referrer-when-downgrade"
+                    onLoad={() => {
+                      setEmbedLoaded(true);
+                      setEmbedError(false);
+                    }}
+                    onError={() => {
+                      setEmbedError(true);
+                      setShowEmbedFallback(true);
+                    }}
+                    className="h-full w-full border-0 bg-black"
+                  />
 
-          {/* Top-Left Live HUD Overlay */}
-          <div className="pointer-events-none absolute top-3 left-3 right-3 flex items-start justify-between gap-2 sm:top-4 sm:left-4 sm:right-4">
-            <div className="inline-flex max-w-[75%] items-center gap-2 rounded-xl border border-white/15 bg-[#050a18]/80 px-3 py-1.5 text-xs text-white backdrop-blur-md">
-              <span
-                className={`h-2 w-2 shrink-0 rounded-full ${
-                  status === 'playing'
-                    ? 'animate-pulse bg-rose-500'
-                    : status === 'connecting'
-                      ? 'animate-pulse bg-amber-400'
-                      : 'bg-slate-400'
-                }`}
-                aria-hidden="true"
+                  {/* Connecting Overlay until Embedded Player Loads */}
+                  {!embedLoaded && !embedError && (
+                    <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center bg-[#040814]/85 px-4 text-center">
+                      <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-sky-400/35 bg-sky-500/15 text-sky-300">
+                        <Radio className="h-7 w-7 animate-pulse" aria-hidden="true" />
+                      </div>
+                      <p className="mt-3 text-sm font-semibold text-white">
+                        Loading {channel.channelName} Live Broadcast…
+                      </p>
+                      <p className="mt-1 text-xs text-slate-400">
+                        {embedSource === 'portal'
+                          ? 'Loading official itn.lk/live broadcast portal inside Neon World Clock'
+                          : 'Connecting to official ITN Sri Lanka live player'}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Subtle Non-Intrusive Recovery Bar if Browser Security/Network Delays Embed */}
+                  {embedError && !embedLoaded && (
+                    <div className="absolute inset-x-3 bottom-3 z-10 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-amber-400/40 bg-[#050a18]/95 px-4 py-3 text-xs text-slate-200 shadow-xl backdrop-blur-md">
+                      <div className="flex items-center gap-2">
+                        <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" aria-hidden="true" />
+                        <span>
+                          Stream taking longer or blocked by browser frame headers?
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {channel.secondaryEmbedUrl && (
+                          <button
+                            type="button"
+                            onClick={() => handleSwitchEmbedSource()}
+                            className="rounded-lg border border-cyan-400/40 bg-cyan-500/18 px-3 py-1.5 font-semibold text-cyan-100 hover:bg-cyan-500/30"
+                          >
+                            {embedSource === 'primary' ? 'Try ITN.lk Portal View' : 'Try Direct Player'}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setShowEmbedFallback(true)}
+                          className="rounded-lg bg-sky-500 px-3 py-1.5 font-bold text-slate-950 hover:bg-sky-400"
+                        >
+                          Fallback Options
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                /* Graceful In-App Fallback View (Never Blank, Never Switches to Foreign Channel) */
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-[#071126] via-[#050b19] to-[#040814] p-6 text-center">
+                  <div className="flex items-center gap-3">
+                    <img
+                      src={`https://flagcdn.com/w80/${selectedCountry.iso}.png`}
+                      alt={`Flag of ${selectedCountry.name}`}
+                      referrerPolicy="no-referrer"
+                      className="h-9 w-13 rounded-lg object-cover ring-1 ring-white/20"
+                    />
+                    <span className="flex h-11 w-11 items-center justify-center rounded-2xl border border-cyan-400/35 bg-cyan-500/15 text-cyan-300">
+                      <Tv className="h-5 w-5" aria-hidden="true" />
+                    </span>
+                  </div>
+
+                  <h2 className="mt-4 text-lg font-bold text-white sm:text-xl">
+                    {channel.channelName}
+                  </h2>
+                  <p className="mt-1.5 max-w-lg text-xs leading-relaxed text-slate-300 sm:text-sm">
+                    If your browser or network blocks embedded third-party broadcast frames, switch
+                    to the alternate in-app view or launch the official{' '}
+                    <span className="font-semibold text-cyan-300">itn.lk/live</span> broadcast page
+                    directly.
+                  </p>
+
+                  <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => handleSwitchEmbedSource('primary')}
+                      className="inline-flex h-10 items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-500/18 px-4 text-xs font-semibold text-cyan-100 transition-colors hover:bg-cyan-500/30 hover:text-white"
+                    >
+                      <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                      <span>Retry Direct Player</span>
+                    </button>
+
+                    {channel.secondaryEmbedUrl && (
+                      <button
+                        type="button"
+                        onClick={() => handleSwitchEmbedSource('portal')}
+                        className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/15 bg-white/[0.07] px-4 text-xs font-semibold text-slate-100 transition-colors hover:bg-white/[0.14]"
+                      >
+                        <Layers className="h-4 w-4 text-sky-400" aria-hidden="true" />
+                        <span>Open ITN.lk In-App Frame</span>
+                      </button>
+                    )}
+
+                    <a
+                      href={channel.officialUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex h-10 items-center gap-2 rounded-xl bg-sky-500 px-4 text-xs font-bold text-slate-950 transition-colors hover:bg-sky-400"
+                    >
+                      <span>Open itn.lk/live</span>
+                      <ExternalLink className="h-4 w-4" aria-hidden="true" />
+                    </a>
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <video
+                ref={videoRef}
+                playsInline
+                controls={false}
+                onClick={handleTogglePlay}
+                className="h-full w-full cursor-pointer object-contain bg-black"
               />
-              <span className="truncate font-semibold">{channel.channelName}</span>
-              <span className="hidden text-[11px] text-cyan-300 sm:inline">
-                {streamMode === 'backup' ? '· Backup International Feed' : '· Live HLS'}
-              </span>
-            </div>
 
-            {autoplayMutedNotice && status === 'playing' && (
-              <button
-                type="button"
-                onClick={handleToggleMute}
-                className="pointer-events-auto inline-flex items-center gap-1.5 rounded-xl border border-amber-400/50 bg-amber-500/90 px-3 py-1.5 text-xs font-bold text-slate-950 shadow-lg transition-colors hover:bg-amber-400"
-              >
-                <VolumeX className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>Tap to Unmute</span>
-              </button>
-            )}
-          </div>
+              {/* Top-Left Live HUD Overlay */}
+              <div className="pointer-events-none absolute top-3 left-3 right-3 flex items-start justify-between gap-2 sm:top-4 sm:left-4 sm:right-4">
+                <div className="inline-flex max-w-[75%] items-center gap-2 rounded-xl border border-white/15 bg-[#050a18]/80 px-3 py-1.5 text-xs text-white backdrop-blur-md">
+                  <span
+                    className={`h-2 w-2 shrink-0 rounded-full ${
+                      status === 'playing'
+                        ? 'animate-pulse bg-rose-500'
+                        : status === 'connecting'
+                          ? 'animate-pulse bg-amber-400'
+                          : 'bg-slate-400'
+                    }`}
+                    aria-hidden="true"
+                  />
+                  <span className="truncate font-semibold">{channel.channelName}</span>
+                  <span className="hidden text-[11px] text-cyan-300 sm:inline">
+                    {streamMode === 'backup' ? '· Backup International Feed' : '· Live HLS'}
+                  </span>
+                </div>
 
-          {/* Connecting / Buffering State */}
-          {status === 'connecting' && (
-            <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center bg-[#040814]/70 px-4 text-center">
-              <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-sky-400/35 bg-sky-500/15 text-sky-300">
-                <Radio className="h-7 w-7 animate-pulse" aria-hidden="true" />
-              </div>
-              <p className="mt-3 text-sm font-semibold text-white">
-                Connecting to {channel.channelName}…
-              </p>
-              <p className="mt-1 text-xs text-slate-400">
-                {streamMode === 'backup'
-                  ? 'Switching to globally available international HLS backup feed'
-                  : 'Establishing secure HTTPS live broadcast stream'}
-              </p>
-            </div>
-          )}
-
-          {/* Clean Fallback Overlay if Stream is Geo-Restricted / Offline */}
-          {status === 'error' && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-[#071126] via-[#050b19] to-[#040814] p-6 text-center">
-              <div className="flex items-center gap-3">
-                <img
-                  src={`https://flagcdn.com/w80/${selectedCountry.iso}.png`}
-                  alt=""
-                  referrerPolicy="no-referrer"
-                  className="h-9 w-13 rounded-lg object-cover ring-1 ring-white/20"
-                />
-                <span className="flex h-11 w-11 items-center justify-center rounded-2xl border border-rose-400/35 bg-rose-500/15 text-rose-300">
-                  <Tv className="h-5 w-5" aria-hidden="true" />
-                </span>
+                {autoplayMutedNotice && status === 'playing' && (
+                  <button
+                    type="button"
+                    onClick={handleToggleMute}
+                    className="pointer-events-auto inline-flex items-center gap-1.5 rounded-xl border border-amber-400/50 bg-amber-500/90 px-3 py-1.5 text-xs font-bold text-slate-950 shadow-lg transition-colors hover:bg-amber-400"
+                  >
+                    <VolumeX className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Tap to Unmute</span>
+                  </button>
+                )}
               </div>
 
-              <h2 className="mt-4 text-lg font-bold text-white sm:text-xl">
-                {channel.channelName}
-              </h2>
-              <p className="mt-1.5 max-w-md text-xs leading-relaxed text-slate-300 sm:text-sm">
-                {errorReason ||
-                  'This public stream is temporarily offline or geo-restricted on your current network.'}
-              </p>
+              {/* Connecting / Buffering State */}
+              {status === 'connecting' && (
+                <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center bg-[#040814]/70 px-4 text-center">
+                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-sky-400/35 bg-sky-500/15 text-sky-300">
+                    <Radio className="h-7 w-7 animate-pulse" aria-hidden="true" />
+                  </div>
+                  <p className="mt-3 text-sm font-semibold text-white">
+                    Connecting to {channel.channelName}…
+                  </p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {streamMode === 'backup'
+                      ? 'Switching to globally available international HLS backup feed'
+                      : 'Establishing secure HTTPS live broadcast stream'}
+                  </p>
+                </div>
+              )}
 
-              <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
-                <button
-                  type="button"
-                  onClick={handleRetryPrimary}
-                  className="inline-flex h-10 items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-500/18 px-4 text-xs font-semibold text-cyan-100 transition-colors hover:bg-cyan-500/30 hover:text-white"
-                >
-                  <RefreshCw className="h-4 w-4" aria-hidden="true" />
-                  <span>Retry Live Stream</span>
-                </button>
+              {/* Clean Fallback Overlay if Stream is Geo-Restricted / Offline */}
+              {status === 'error' && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-[#071126] via-[#050b19] to-[#040814] p-6 text-center">
+                  <div className="flex items-center gap-3">
+                    <img
+                      src={`https://flagcdn.com/w80/${selectedCountry.iso}.png`}
+                      alt=""
+                      referrerPolicy="no-referrer"
+                      className="h-9 w-13 rounded-lg object-cover ring-1 ring-white/20"
+                    />
+                    <span className="flex h-11 w-11 items-center justify-center rounded-2xl border border-rose-400/35 bg-rose-500/15 text-rose-300">
+                      <Tv className="h-5 w-5" aria-hidden="true" />
+                    </span>
+                  </div>
 
-                <a
-                  href={channel.officialUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex h-10 items-center gap-2 rounded-xl bg-sky-500 px-4 text-xs font-bold text-slate-950 transition-colors hover:bg-sky-400"
-                >
-                  <span>Watch on Official Broadcaster</span>
-                  <ExternalLink className="h-4 w-4" aria-hidden="true" />
-                </a>
-              </div>
-            </div>
+                  <h2 className="mt-4 text-lg font-bold text-white sm:text-xl">
+                    {channel.channelName}
+                  </h2>
+                  <p className="mt-1.5 max-w-md text-xs leading-relaxed text-slate-300 sm:text-sm">
+                    {errorReason ||
+                      'This public stream is temporarily offline or geo-restricted on your current network.'}
+                  </p>
+
+                  <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleRetryPrimary}
+                      className="inline-flex h-10 items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-500/18 px-4 text-xs font-semibold text-cyan-100 transition-colors hover:bg-cyan-500/30 hover:text-white"
+                    >
+                      <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                      <span>Retry Live Stream</span>
+                    </button>
+
+                    <a
+                      href={channel.officialUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex h-10 items-center gap-2 rounded-xl bg-sky-500 px-4 text-xs font-bold text-slate-950 transition-colors hover:bg-sky-400"
+                    >
+                      <span>Watch on Official Broadcaster</span>
+                      <ExternalLink className="h-4 w-4" aria-hidden="true" />
+                    </a>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
 
         {/* Player Controls Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.08] bg-[#071022]/95 px-4 py-3 sm:px-5">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleTogglePlay}
-              aria-label={status === 'playing' ? 'Pause broadcast' : 'Play broadcast'}
-              className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-sky-500 px-3.5 text-xs font-bold text-slate-950 transition-colors hover:bg-sky-400"
-            >
-              {status === 'playing' ? (
-                <>
-                  <Pause className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
-                  <span>Pause</span>
-                </>
-              ) : (
-                <>
-                  <Play className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
-                  <span>Play</span>
-                </>
-              )}
-            </button>
+        {isEmbedChannel ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.08] bg-[#071022]/95 px-4 py-3 sm:px-5">
+            <div className="flex min-w-0 items-center gap-2.5 text-xs">
+              <span className="inline-flex items-center gap-1.5 font-semibold text-white">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-rose-500" aria-hidden="true" />
+                <span className="truncate">{channel.channelName}</span>
+              </span>
+              <span aria-hidden="true" className="text-slate-600">
+                ·
+              </span>
+              <span className="truncate text-cyan-300">
+                {showEmbedFallback
+                  ? 'Fallback View'
+                  : embedSource === 'portal'
+                    ? 'ITN.lk Portal Embed'
+                    : 'Official In-App Player'}
+              </span>
+            </div>
 
-            <button
-              type="button"
-              onClick={handleToggleMute}
-              aria-label={isMuted ? 'Unmute broadcast' : 'Mute broadcast'}
-              className={`inline-flex h-9 items-center gap-1.5 rounded-xl border px-3 text-xs font-semibold transition-colors ${
-                isMuted
-                  ? 'border-amber-400/45 bg-amber-500/18 text-amber-200 hover:bg-amber-500/28'
-                  : 'border-white/14 bg-white/[0.06] text-slate-200 hover:bg-white/[0.12] hover:text-white'
-              }`}
-            >
-              {isMuted ? (
-                <>
-                  <VolumeX className="h-4 w-4" aria-hidden="true" />
-                  <span>Unmute</span>
-                </>
-              ) : (
-                <>
-                  <Volume2 className="h-4 w-4 text-sky-400" aria-hidden="true" />
-                  <span className="hidden sm:inline">Mute</span>
-                </>
+            <div className="flex flex-wrap items-center gap-2">
+              {channel.secondaryEmbedUrl && (
+                <button
+                  type="button"
+                  onClick={() => handleSwitchEmbedSource()}
+                  title="Switch between ITN Direct Stream Player and itn.lk/live portal view"
+                  className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-cyan-400/35 bg-cyan-500/12 px-3 text-xs font-semibold text-cyan-200 transition-colors hover:bg-cyan-500/22 hover:text-white"
+                >
+                  <Layers className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>
+                    {embedSource === 'primary' ? 'ITN.lk Portal View' : 'Direct Stream Player'}
+                  </span>
+                </button>
               )}
-            </button>
 
-            <div className="hidden items-center gap-2 pl-1 md:flex">
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.05}
-                value={isMuted ? 0 : volume}
-                onChange={(e) => handleVolumeChange(Number(e.target.value))}
-                aria-label="Broadcast volume"
-                className="h-1.5 w-24 cursor-pointer accent-sky-400"
-              />
+              <button
+                type="button"
+                onClick={handleRetryPrimary}
+                aria-label="Reload ITN Sri Lanka player"
+                className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.05] px-3 text-xs font-semibold text-slate-200 transition-colors hover:bg-white/[0.11] hover:text-white"
+              >
+                <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                <span className="hidden sm:inline">Reload</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowEmbedFallback((v) => !v)}
+                className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.05] px-3 text-xs font-semibold text-slate-200 transition-colors hover:bg-white/[0.11] hover:text-white"
+              >
+                <Signal className="h-3.5 w-3.5 text-amber-400" aria-hidden="true" />
+                <span>{showEmbedFallback ? 'Back to Player' : 'Fallback'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleToggleFullscreen}
+                aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+                className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.05] px-3 text-xs font-semibold text-slate-200 transition-colors hover:bg-white/[0.11] hover:text-white"
+              >
+                {isFullscreen ? (
+                  <Minimize className="h-4 w-4 text-sky-400" aria-hidden="true" />
+                ) : (
+                  <Maximize className="h-4 w-4 text-sky-400" aria-hidden="true" />
+                )}
+                <span className="hidden sm:inline">
+                  {isFullscreen ? 'Exit Full' : 'Fullscreen'}
+                </span>
+              </button>
             </div>
           </div>
+        ) : (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.08] bg-[#071022]/95 px-4 py-3 sm:px-5">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleTogglePlay}
+                aria-label={status === 'playing' ? 'Pause broadcast' : 'Play broadcast'}
+                className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-sky-500 px-3.5 text-xs font-bold text-slate-950 transition-colors hover:bg-sky-400"
+              >
+                {status === 'playing' ? (
+                  <>
+                    <Pause className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
+                    <span>Pause</span>
+                  </>
+                ) : (
+                  <>
+                    <Play className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
+                    <span>Play</span>
+                  </>
+                )}
+              </button>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={handleToggleBackupFeed}
-              title="Switch between primary and backup international HLS feed"
-              className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.05] px-3 text-xs font-semibold text-slate-200 transition-colors hover:border-cyan-400/40 hover:bg-white/[0.11] hover:text-white"
-            >
-              <Signal className="h-3.5 w-3.5 text-cyan-400" aria-hidden="true" />
-              <span>{streamMode === 'primary' ? 'Backup Feed' : 'Primary Feed'}</span>
-            </button>
+              <button
+                type="button"
+                onClick={handleToggleMute}
+                aria-label={isMuted ? 'Unmute broadcast' : 'Mute broadcast'}
+                className={`inline-flex h-9 items-center gap-1.5 rounded-xl border px-3 text-xs font-semibold transition-colors ${
+                  isMuted
+                    ? 'border-amber-400/45 bg-amber-500/18 text-amber-200 hover:bg-amber-500/28'
+                    : 'border-white/14 bg-white/[0.06] text-slate-200 hover:bg-white/[0.12] hover:text-white'
+                }`}
+              >
+                {isMuted ? (
+                  <>
+                    <VolumeX className="h-4 w-4" aria-hidden="true" />
+                    <span>Unmute</span>
+                  </>
+                ) : (
+                  <>
+                    <Volume2 className="h-4 w-4 text-sky-400" aria-hidden="true" />
+                    <span className="hidden sm:inline">Mute</span>
+                  </>
+                )}
+              </button>
 
-            <button
-              type="button"
-              onClick={handleRetryPrimary}
-              aria-label="Reload live stream"
-              className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.05] px-3 text-xs font-semibold text-slate-200 transition-colors hover:bg-white/[0.11] hover:text-white"
-            >
-              <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
-              <span className="hidden sm:inline">Reload</span>
-            </button>
+              <div className="hidden items-center gap-2 pl-1 md:flex">
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={isMuted ? 0 : volume}
+                  onChange={(e) => handleVolumeChange(Number(e.target.value))}
+                  aria-label="Broadcast volume"
+                  className="h-1.5 w-24 cursor-pointer accent-sky-400"
+                />
+              </div>
+            </div>
 
-            <button
-              type="button"
-              onClick={handleToggleFullscreen}
-              aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
-              className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.05] px-3 text-xs font-semibold text-slate-200 transition-colors hover:bg-white/[0.11] hover:text-white"
-            >
-              {isFullscreen ? (
-                <Minimize className="h-4 w-4 text-sky-400" aria-hidden="true" />
-              ) : (
-                <Maximize className="h-4 w-4 text-sky-400" aria-hidden="true" />
-              )}
-              <span className="hidden sm:inline">
-                {isFullscreen ? 'Exit Full' : 'Fullscreen'}
-              </span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleToggleBackupFeed}
+                title="Switch between primary and backup international HLS feed"
+                className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.05] px-3 text-xs font-semibold text-slate-200 transition-colors hover:border-cyan-400/40 hover:bg-white/[0.11] hover:text-white"
+              >
+                <Signal className="h-3.5 w-3.5 text-cyan-400" aria-hidden="true" />
+                <span>{streamMode === 'primary' ? 'Backup Feed' : 'Primary Feed'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleRetryPrimary}
+                aria-label="Reload live stream"
+                className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.05] px-3 text-xs font-semibold text-slate-200 transition-colors hover:bg-white/[0.11] hover:text-white"
+              >
+                <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                <span className="hidden sm:inline">Reload</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleToggleFullscreen}
+                aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
+                className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-white/14 bg-white/[0.05] px-3 text-xs font-semibold text-slate-200 transition-colors hover:bg-white/[0.11] hover:text-white"
+              >
+                {isFullscreen ? (
+                  <Minimize className="h-4 w-4 text-sky-400" aria-hidden="true" />
+                ) : (
+                  <Maximize className="h-4 w-4 text-sky-400" aria-hidden="true" />
+                )}
+                <span className="hidden sm:inline">
+                  {isFullscreen ? 'Exit Full' : 'Fullscreen'}
+                </span>
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </section>
 
       {/* 3. Broadcast Description & Clean Audio Status */}

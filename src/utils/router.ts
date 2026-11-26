@@ -12,6 +12,7 @@ export type AppRoute =
   | { page: 'dashboard' }
   | { page: 'live-tv'; code?: string }
   | { page: 'live-radio'; code?: string }
+  | { page: 'entertainment-live' }
   | { page: 'account' };
 
 export function parseHashRoute(rawHash: string): AppRoute {
@@ -59,6 +60,8 @@ export function parseHashRoute(rawHash: string): AppRoute {
       return { page: 'live-tv', code: param || undefined };
     case 'live-radio':
       return { page: 'live-radio', code: param || undefined };
+    case 'entertainment-live':
+      return { page: 'entertainment-live' };
     case 'account':
       return { page: 'account' };
     default:
@@ -100,6 +103,8 @@ export function routeToHash(route: AppRoute): string {
       return route.code
         ? `#/live-radio/${encodeURIComponent(route.code.toLowerCase())}`
         : '#/live-radio';
+    case 'entertainment-live':
+      return '#/entertainment-live';
     case 'account':
       return '#/account';
   }

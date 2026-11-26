@@ -11,8 +11,12 @@ export interface LiveTvChannel {
   fallbackHlsUrl: string;
   /** Official broadcaster live watch page (HTTPS) for external fallback */
   officialUrl: string;
-  /** Optional official embeddable live stream URL (e.g. YouTube live channel embed) */
+  /** Optional official embeddable live stream URL */
   embedUrl?: string;
+  /** Optional secondary official live page embed URL (e.g. https://itn.lk/live/) */
+  secondaryEmbedUrl?: string;
+  /** Render the official in-app embedded player instead of HLS/foreign fallback */
+  preferEmbed?: boolean;
   isRegionalFallback?: boolean;
   description: string;
 }
@@ -45,14 +49,17 @@ const RELIABLE_GLOBAL_HLS = {
 
 const CURATED_CHANNELS: Record<string, Omit<LiveTvChannel, 'fallbackHlsUrl'>> = {
   lk: {
-    channelName: 'Ada Derana 24 · Sri Lanka News',
-    network: 'Derana Macroentertainment & CNA South Asia',
-    category: 'National News & Live Desk',
-    language: 'Sinhala / English',
-    hlsUrl: RELIABLE_GLOBAL_HLS.CNA_ASIA,
-    officialUrl: 'https://www.adaderana.lk/live.php',
+    channelName: 'ITN Sri Lanka',
+    network: 'Independent Television Network (ITN)',
+    category: 'National Television · Live',
+    language: 'Sinhala / English / Tamil',
+    hlsUrl: '',
+    embedUrl: 'https://cp.comcities.com/embed/k9qpbqnle3q6lhi7',
+    secondaryEmbedUrl: 'https://itn.lk/live/',
+    preferEmbed: true,
+    officialUrl: 'https://itn.lk/live/',
     description:
-      'Live Sri Lankan and Indian Ocean regional breaking news, current affairs, and South Asian broadcast coverage.',
+      'Official live television broadcast from ITN Sri Lanka (Independent Television Network, Colombo) sourced from itn.lk/live.',
   },
   jp: {
     channelName: 'NHK World-Japan',
@@ -620,6 +627,12 @@ function getRegionalFallbackChannel(country: Country): LiveTvChannel {
 export function getLiveTvChannelForCountry(country: Country): LiveTvChannel {
   const curated = CURATED_CHANNELS[country.iso.toLowerCase()];
   if (curated) {
+    if (curated.preferEmbed) {
+      return {
+        ...curated,
+        fallbackHlsUrl: '',
+      };
+    }
     const fallbackHlsUrl =
       curated.hlsUrl === RELIABLE_GLOBAL_HLS.DW_ENGLISH
         ? RELIABLE_GLOBAL_HLS.FRANCE24_EN
