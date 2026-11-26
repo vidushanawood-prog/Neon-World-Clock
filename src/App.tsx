@@ -1236,7 +1236,7 @@ export default function App() {
     if (route.page === 'entertainment-live') {
       return renderDedicatedSubPage(
         'Entertainment Live',
-        'Live movies, cartoons, anime, music & entertainment HLS channels (non-news)',
+        '1,000+ live HLS channels across Movies, Cartoons, Sports, News, Music & more',
         <EntertainmentLivePage />
       );
     }
@@ -2074,7 +2074,7 @@ export default function App() {
               <div className="min-w-0">
                 <p>Entertainment Live</p>
                 <p className="truncate text-[11px] font-normal text-slate-400">
-                  Movies, cartoons, music &amp; shows (no news)
+                  1,000+ channels · Movies, Cartoons, Sports, News &amp; Music
                 </p>
               </div>
             </button>

@@ -1,14 +1,34 @@
-export type EntertainmentCategory = 'entertainment' | 'cartoons' | 'movies' | 'music';
+export type EntertainmentCategory =
+  | 'animation'
+  | 'movies'
+  | 'family'
+  | 'sports'
+  | 'news'
+  | 'entertainment'
+  | 'music'
+  | 'comedy'
+  | 'documentary'
+  | 'lifestyle'
+  | 'kids'
+  | 'series';
+
+export type CategoryFilter = 'all' | EntertainmentCategory;
+
+export type ChannelHealth = 'working' | 'offline';
 
 export interface EntertainmentChannel {
   id: string;
   name: string;
   url: string;
+  /** Primary category for display */
   category: EntertainmentCategory;
+  /** All category playlists that include this stream URL (preserved during URL deduplication) */
+  categories: EntertainmentCategory[];
   logo?: string;
   resolution?: string;
   sourceLabel: string;
   featured?: boolean;
+  qualityScore: number;
 }
 
 export interface EntertainmentPlaylistResult {
@@ -19,6 +39,37 @@ export interface EntertainmentPlaylistResult {
   fetchedAt: number;
 }
 
+export const CATEGORY_TABS: readonly { id: CategoryFilter; label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'animation', label: 'Cartoons & Anime' },
+  { id: 'movies', label: 'Movies' },
+  { id: 'sports', label: 'Sports' },
+  { id: 'news', label: 'News' },
+  { id: 'family', label: 'Family' },
+  { id: 'entertainment', label: 'Entertainment' },
+  { id: 'music', label: 'Music' },
+  { id: 'comedy', label: 'Comedy' },
+  { id: 'documentary', label: 'Documentary' },
+  { id: 'lifestyle', label: 'Lifestyle' },
+  { id: 'kids', label: 'Kids' },
+  { id: 'series', label: 'Series' },
+];
+
+export const CATEGORY_LABELS: Record<EntertainmentCategory, string> = {
+  animation: 'Cartoons & Anime',
+  movies: 'Movies',
+  family: 'Family',
+  sports: 'Sports',
+  news: 'News',
+  entertainment: 'Entertainment',
+  music: 'Music',
+  comedy: 'Comedy',
+  documentary: 'Documentary',
+  lifestyle: 'Lifestyle',
+  kids: 'Kids',
+  series: 'Series',
+};
+
 interface PlaylistSource {
   category: EntertainmentCategory;
   label: string;
@@ -27,163 +78,210 @@ interface PlaylistSource {
 
 const PLAYLIST_SOURCES: readonly PlaylistSource[] = [
   {
-    category: 'entertainment',
-    label: 'IPTV-Org Entertainment',
-    url: 'https://iptv-org.github.io/iptv/categories/entertainment.m3u',
-  },
-  {
-    category: 'movies',
-    label: 'IPTV-Org Movies',
-    url: 'https://iptv-org.github.io/iptv/categories/movies.m3u',
-  },
-  {
-    category: 'cartoons',
-    label: 'IPTV-Org Animation',
+    category: 'animation',
+    label: 'Cartoons & Anime',
     url: 'https://iptv-org.github.io/iptv/categories/animation.m3u',
   },
   {
+    category: 'movies',
+    label: 'Movies',
+    url: 'https://iptv-org.github.io/iptv/categories/movies.m3u',
+  },
+  {
+    category: 'family',
+    label: 'Family',
+    url: 'https://iptv-org.github.io/iptv/categories/family.m3u',
+  },
+  {
+    category: 'sports',
+    label: 'Sports',
+    url: 'https://iptv-org.github.io/iptv/categories/sports.m3u',
+  },
+  {
+    category: 'news',
+    label: 'News',
+    url: 'https://iptv-org.github.io/iptv/categories/news.m3u',
+  },
+  {
+    category: 'entertainment',
+    label: 'Entertainment',
+    url: 'https://iptv-org.github.io/iptv/categories/entertainment.m3u',
+  },
+  {
     category: 'music',
-    label: 'IPTV-Org Music',
+    label: 'Music',
     url: 'https://iptv-org.github.io/iptv/categories/music.m3u',
+  },
+  {
+    category: 'comedy',
+    label: 'Comedy',
+    url: 'https://iptv-org.github.io/iptv/categories/comedy.m3u',
+  },
+  {
+    category: 'documentary',
+    label: 'Documentary',
+    url: 'https://iptv-org.github.io/iptv/categories/documentary.m3u',
+  },
+  {
+    category: 'lifestyle',
+    label: 'Lifestyle',
+    url: 'https://iptv-org.github.io/iptv/categories/lifestyle.m3u',
+  },
+  {
+    category: 'kids',
+    label: 'Kids',
+    url: 'https://iptv-org.github.io/iptv/categories/kids.m3u',
+  },
+  {
+    category: 'series',
+    label: 'Series',
+    url: 'https://iptv-org.github.io/iptv/categories/series.m3u',
   },
 ];
 
 /**
- * Verified CORS-friendly HTTPS HLS (.m3u8) entertainment channels across all 4 genres
- * (entertainment, cartoons, movies, music) so playback starts reliably right away
- * and remains available even if a remote playlist endpoint is temporarily slow.
+ * Verified CORS-friendly HTTPS HLS (.m3u8) spotlight channels seeded first so playback
+ * starts instantaneously while all 12 iptv-org playlists download and background verification runs.
  */
 export const VERIFIED_SPOTLIGHT_CHANNELS: readonly EntertainmentChannel[] = [
   {
     id: 'spotlight-redbull-tv',
     name: 'Red Bull TV',
     url: 'https://rbmn-live.akamaized.net/hls/live/590964/BoRB-AT/master.m3u8',
-    category: 'entertainment',
+    category: 'sports',
+    categories: ['sports', 'entertainment'],
     resolution: '1080p',
-    sourceLabel: 'Spotlight · Entertainment',
+    sourceLabel: 'Spotlight · Sports & Entertainment',
     featured: true,
+    qualityScore: 100,
   },
   {
     id: 'spotlight-24h-free-movies',
     name: '24 Hour Free Movies',
     url: 'https://d1j2u714xk898n.cloudfront.net/scheduler/scheduleMaster/145.m3u8',
     category: 'movies',
+    categories: ['movies', 'entertainment'],
     resolution: '720p',
     sourceLabel: 'Spotlight · Movies',
     featured: true,
+    qualityScore: 99,
   },
   {
     id: 'spotlight-cartoon-cartoons',
     name: 'Cartoon Cartoons',
     url: 'https://cartooncartoons.thatsoretro.com/hls/stream.m3u8',
-    category: 'cartoons',
+    category: 'animation',
+    categories: ['animation', 'kids', 'family'],
     resolution: '720p',
-    sourceLabel: 'Spotlight · Cartoons',
+    sourceLabel: 'Spotlight · Cartoons & Anime',
     featured: true,
+    qualityScore: 98,
   },
   {
     id: 'spotlight-30a-tv',
     name: '30A Television Channel',
     url: 'https://30a-tv.com/feeds/masters/30atv.m3u8',
     category: 'entertainment',
+    categories: ['entertainment', 'lifestyle'],
     resolution: '720p',
     sourceLabel: 'Spotlight · Entertainment',
     featured: true,
+    qualityScore: 97,
   },
   {
     id: 'spotlight-30a-classic-movies',
     name: '30A TV Classic Movies',
     url: 'https://30a-tv.com/feeds/pzaz/30atvmovies.m3u8',
     category: 'movies',
+    categories: ['movies', 'family'],
     resolution: '720p',
     sourceLabel: 'Spotlight · Movies',
     featured: true,
+    qualityScore: 96,
   },
   {
     id: 'spotlight-botflix-tv',
     name: 'Botflix Animation TV',
     url: 'https://hls.botflix.tv/tv/index.m3u8',
-    category: 'cartoons',
+    category: 'animation',
+    categories: ['animation', 'comedy'],
     resolution: '1080p',
-    sourceLabel: 'Spotlight · Cartoons',
+    sourceLabel: 'Spotlight · Cartoons & Anime',
     featured: true,
+    qualityScore: 95,
   },
   {
     id: 'spotlight-3abn-kids',
     name: '3ABN Kids',
     url: 'https://3abn.bozztv.com/3abn2/Kids_live/smil:Kids_live.smil/playlist.m3u8',
-    category: 'cartoons',
+    category: 'kids',
+    categories: ['kids', 'family', 'animation'],
     resolution: '720p',
-    sourceLabel: 'Spotlight · Cartoons',
+    sourceLabel: 'Spotlight · Kids & Family',
     featured: true,
+    qualityScore: 94,
   },
   {
     id: 'spotlight-9xm',
     name: '9XM Music',
     url: 'https://wiselp.wiseplayout.com/9XM/master.m3u8',
     category: 'music',
+    categories: ['music', 'entertainment'],
     resolution: '1080p',
     sourceLabel: 'Spotlight · Music',
     featured: true,
+    qualityScore: 93,
   },
   {
     id: 'spotlight-9x-jalwa',
     name: '9X Jalwa Music',
     url: 'https://wiselp.wiseplayout.com/9X_Jalwa/master.m3u8',
     category: 'music',
+    categories: ['music'],
     resolution: '1080p',
     sourceLabel: 'Spotlight · Music',
     featured: true,
+    qualityScore: 92,
   },
   {
     id: 'spotlight-4-music',
     name: '4 Music Live',
     url: 'https://musichls.persiana.live/hls/stream.m3u8',
     category: 'music',
+    categories: ['music'],
     resolution: '720p',
     sourceLabel: 'Spotlight · Music',
     featured: true,
+    qualityScore: 91,
   },
   {
     id: 'spotlight-4u-tv',
     name: '4U TV Entertainment',
     url: 'https://hls.4utv.live/hls/stream.m3u8',
     category: 'entertainment',
+    categories: ['entertainment', 'series'],
     resolution: '720p',
     sourceLabel: 'Spotlight · Entertainment',
     featured: true,
+    qualityScore: 90,
   },
   {
     id: 'spotlight-adn-tv',
     name: 'ADN Anime TV+',
     url: 'https://d3b73b34o7cvkq.cloudfront.net/v1/master/3722c60a815c199d9c0ef36c5b73da68a62b09d1/cc-gz2sgqzp076kf/adn.m3u8',
-    category: 'cartoons',
+    category: 'animation',
+    categories: ['animation', 'series'],
     resolution: '720p',
-    sourceLabel: 'Spotlight · Cartoons',
+    sourceLabel: 'Spotlight · Cartoons & Anime',
     featured: true,
+    qualityScore: 89,
   },
 ];
 
-/**
- * Strict news, politics, business-news, weather-news, and parliamentary channel exclusion regex.
- * Applied against channel name, group-title, tvg-id, and stream URL.
- */
-const NEWS_EXCLUSION_REGEX =
-  /\b(news|cnn|bbc\s*news|bbc\s*world|sky\s*news|fox\s*news|msnbc|cnbc|bloomberg|al\s*jazeera|aljazeera|euronews|france\s*24|france24|dw\s*english|dw\s*news|nhk\s*world|cgtn|wion|ndtv|aaj\s*tak|republic\s*tv|times\s*now|india\s*today|c-?span|parliament|legislative|weather\s*channel|accuweather|breaking|headlines|notic|noticias|telediario|actualit|nachrichten|tagesschau|novosti|vesti|khabar|akhbar|samachar|haber|informacion|24\s*horas|bfm\s*tv|cnews|lci|rt\s*news|trtworld|trt\s*world|arirang|cna\b|channel\s*news|business\s*tv|finance\s*news|politics|press\s*tv|abc\s*news|cbs\s*news|nbc\s*news|gb\s*news|talktv|newsmax|oann|tv5monde\s*info)\b/i;
-
 const BLOCKED_TAGS_REGEX = /\[(geo-blocked|not\s*24\/7|offline)\]/i;
 
-const CARTOON_HINT_REGEX =
-  /\b(cartoon|anime|kids|toon|nick|disney|junior|boomer|pogo|animax|animation|manga|baby|peppa|looney|jetix|cbbc|cbeebies|pb[s]?\s*kids|pixar|super\s*rtl|kika|gulli)\b/i;
-
-const MOVIE_HINT_REGEX =
-  /\b(movie|movies|cinema|film|films|hollywood|bollywood|cine|action|thriller|horror|sci-?fi|western|classic\s*tv|hallmark|romcom|mystery|drama\s*movies|popcorn|flix|box\s*office)\b/i;
-
-const MUSIC_HINT_REGEX =
-  /\b(music|mtv|vh1|vevo|hits|pop|rock|jazz|hip\s*hop|rap|edm|dance|club|concert|melody|beats|audio|fm\s*tv|trace|kiss\s*tv|kerrang|box\s*hits|deluxe\s*music|mezz[o]?|stingray|jukebox|radio\s*vision)\b/i;
-
-const ENGLISH_PRIORITY_HINT_REGEX =
-  /\b(english|usa|uk|us|hollywood|classic|cartoon|anime|movies|cinema|music|hits|pop|rock|comedy|action|retro|thriller|drama|sci-?fi|kids|family|flix|30a|red\s*bull|pluto|plex|tastemade|failarmy|pet\s*collective|people\s*are\s*awesome)\b/i;
+const PRIORITY_BRAND_REGEX =
+  /\b(english|usa|uk|hollywood|classic|cartoon|anime|movies|cinema|music|hits|comedy|action|retro|thriller|drama|sci-?fi|kids|family|flix|sports|espn|nfl|nba|fifa|documentary|history|nature|science|lifestyle|food|travel|series|dw|france\s*24|nhk|euronews|al\s*jazeera|sky|abc|cbs|nbc|pluto|plex|30a|red\s*bull)\b/i;
 
 function extractAttr(line: string, attrName: string): string {
   const match = line.match(new RegExp(`${attrName}="([^"]*)"`, 'i'));
@@ -207,10 +305,7 @@ function isStrictHttpsHlsUrl(rawUrl: string): boolean {
     const parsed = new URL(rawUrl);
     if (parsed.protocol !== 'https:') return false;
     const lowerPath = `${parsed.pathname}${parsed.search}`.toLowerCase();
-    if (!lowerPath.includes('.m3u8')) return false;
-    // Skip redirector proxy URLs that frequently fail browser CORS in sandboxed/client HLS.js players
-    if (parsed.hostname === 'jmp2.uk') return false;
-    return true;
+    return lowerPath.includes('.m3u8');
   } catch {
     return false;
   }
@@ -226,27 +321,40 @@ function isSafeHttpsImage(rawUrl: string): string | undefined {
   }
 }
 
-function resolveCategory(
-  sourceCategory: EntertainmentCategory,
-  name: string,
-  groupTitle: string
-): EntertainmentCategory {
-  const combined = `${name} ${groupTitle}`;
-  if (sourceCategory === 'cartoons' || CARTOON_HINT_REGEX.test(combined)) {
-    return 'cartoons';
-  }
-  if (sourceCategory === 'movies' || MOVIE_HINT_REGEX.test(combined)) {
-    return 'movies';
-  }
-  if (sourceCategory === 'music' || MUSIC_HINT_REGEX.test(combined)) {
-    return 'music';
-  }
-  return 'entertainment';
-}
-
 function isLatinFriendlyName(name: string): boolean {
   const latinChars = (name.match(/[A-Za-z0-9]/g) || []).length;
   return latinChars >= Math.max(2, Math.floor(name.length * 0.45));
+}
+
+function computeQualityScore(
+  name: string,
+  url: string,
+  resolution?: string,
+  logo?: string
+): number {
+  let score = 0;
+  if (isLatinFriendlyName(name)) score += 25;
+  if (PRIORITY_BRAND_REGEX.test(name)) score += 20;
+  if (resolution === '1080p') score += 14;
+  else if (resolution === '720p') score += 10;
+  else if (resolution === '576p' || resolution === '480p') score += 4;
+  if (logo) score += 5;
+
+  const lowerUrl = url.toLowerCase();
+  if (
+    lowerUrl.includes('cloudfront.net') ||
+    lowerUrl.includes('akamaized.net') ||
+    lowerUrl.includes('amagi.tv') ||
+    lowerUrl.includes('fastly.net') ||
+    lowerUrl.includes('wurl.com')
+  ) {
+    score += 12;
+  }
+  // Deprioritize redirect proxies that frequently fail browser CORS while still keeping them discoverable
+  if (lowerUrl.includes('jmp2.uk')) {
+    score -= 18;
+  }
+  return score;
 }
 
 function parseM3uPlaylist(
@@ -260,7 +368,6 @@ function parseM3uPlaylist(
     const line = lines[i].trim();
     if (!line.startsWith('#EXTINF:')) continue;
 
-    // Scan forward past any #EXTVLCOPT or extra comment directives to the stream URL
     let urlLine = '';
     let j = i + 1;
     while (j < lines.length) {
@@ -285,28 +392,26 @@ function parseM3uPlaylist(
     const rawTitle = commaIndex >= 0 ? line.slice(commaIndex + 1).trim() : '';
     if (!rawTitle || BLOCKED_TAGS_REGEX.test(rawTitle)) continue;
 
-    const groupTitle = extractAttr(line, 'group-title');
-    const tvgId = extractAttr(line, 'tvg-id');
     const logo = isSafeHttpsImage(extractAttr(line, 'tvg-logo'));
-
-    // Strictly reject any news-related channels across title, group, tvg-id, and URL
-    const inspectionText = `${rawTitle} ${groupTitle} ${tvgId} ${urlLine}`;
-    if (NEWS_EXCLUSION_REGEX.test(inspectionText)) continue;
-
     const { name, resolution } = cleanChannelTitle(rawTitle);
     if (!name || name.length < 2) continue;
 
-    const category = resolveCategory(source.category, name, groupTitle);
+    const qualityScore = computeQualityScore(name, urlLine, resolution, logo);
 
     parsed.push({
-      id: `iptv-${category}-${parsed.length}-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 28)}`,
+      id: `iptv-${source.category}-${parsed.length}-${name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .slice(0, 24)}`,
       name,
       url: urlLine,
-      category,
+      category: source.category,
+      categories: [source.category],
       logo,
       resolution,
-      sourceLabel: source.label,
+      sourceLabel: `IPTV-Org · ${source.label}`,
       featured: false,
+      qualityScore,
     });
   }
 
@@ -316,6 +421,91 @@ function parseM3uPlaylist(
 const CACHE_TTL_MS = 15 * 60 * 1000;
 let cachedResult: EntertainmentPlaylistResult | null = null;
 let inflightPromise: Promise<EntertainmentPlaylistResult> | null = null;
+
+/**
+ * Session-scoped health cache so verified Live / Offline streams stay remembered
+ * across tab/page navigation without hammering broadcasters repeatedly.
+ */
+const HEALTH_CACHE_TTL_MS = 10 * 60 * 1000;
+const channelHealthCache = new Map<string, { status: ChannelHealth; checkedAt: number }>();
+
+export function getCachedHealthSnapshot(): Record<string, ChannelHealth> {
+  const now = Date.now();
+  const snapshot: Record<string, ChannelHealth> = {};
+  for (const [id, entry] of channelHealthCache.entries()) {
+    if (now - entry.checkedAt < HEALTH_CACHE_TTL_MS) {
+      snapshot[id] = entry.status;
+    }
+  }
+  return snapshot;
+}
+
+export function setCachedChannelHealth(channelId: string, status: ChannelHealth): void {
+  channelHealthCache.set(channelId, { status, checkedAt: Date.now() });
+}
+
+export function clearCachedChannelHealth(channelId?: string): void {
+  if (channelId) {
+    channelHealthCache.delete(channelId);
+  } else {
+    channelHealthCache.clear();
+  }
+}
+
+/**
+ * Lightweight, browser-CORS-accurate HTTPS HLS (.m3u8) health probe.
+ * Reads only the initial manifest chunk (aborts immediately after verifying #EXTM3U)
+ * with a short timeout so mobile browsers remain smooth and lag-free.
+ */
+export async function probeHlsStream(
+  url: string,
+  timeoutMs = 3000,
+  externalSignal?: AbortSignal
+): Promise<ChannelHealth> {
+  if (externalSignal?.aborted) return 'offline';
+
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+
+  const onExternalAbort = () => controller.abort();
+  externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      mode: 'cors',
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      return 'offline';
+    }
+
+    // Read only the first chunk to confirm valid HLS (#EXTM3U) without downloading large bodies
+    if (response.body && typeof response.body.getReader === 'function') {
+      const reader = response.body.getReader();
+      try {
+        const { value } = await reader.read();
+        void reader.cancel().catch(() => {});
+        if (!value || value.length === 0) return 'offline';
+        const snippet = new TextDecoder().decode(value.slice(0, 512));
+        return snippet.includes('#EXTM3U') ? 'working' : 'offline';
+      } catch {
+        void reader.cancel().catch(() => {});
+        return 'offline';
+      }
+    }
+
+    const text = await response.text();
+    return text.slice(0, 512).includes('#EXTM3U') ? 'working' : 'offline';
+  } catch {
+    return 'offline';
+  } finally {
+    window.clearTimeout(timer);
+    externalSignal?.removeEventListener('abort', onExternalAbort);
+  }
+}
 
 export async function loadEntertainmentChannels(
   forceRefresh = false
@@ -328,94 +518,67 @@ export async function loadEntertainmentChannels(
   }
 
   inflightPromise = (async () => {
-    const seenUrls = new Set<string>();
-    const seenNames = new Set<string>();
+    const byUrl = new Map<string, EntertainmentChannel>();
     const merged: EntertainmentChannel[] = [];
 
-    // 1. Seed with verified spotlight channels first so playback works immediately on click/load
+    // 1. Seed verified instant-play spotlight channels first
     for (const ch of VERIFIED_SPOTLIGHT_CHANNELS) {
-      const normalizedUrl = ch.url.trim();
-      const normalizedName = ch.name.toLowerCase().replace(/[^a-z0-9]+/g, '');
-      if (!seenUrls.has(normalizedUrl)) {
-        seenUrls.add(normalizedUrl);
-        seenNames.add(normalizedName);
-        merged.push(ch);
-      }
+      const copy: EntertainmentChannel = { ...ch, categories: [...ch.categories] };
+      byUrl.set(copy.url, copy);
+      merged.push(copy);
     }
 
-    // 2. Fetch all 4 public iptv-org entertainment M3U playlists in parallel
+    // 2. Fetch all 12 public iptv-org category playlists in two smooth waves of 6
     let loadedPlaylists = 0;
-    const fetchedBatches = await Promise.all(
-      PLAYLIST_SOURCES.map(async (source) => {
-        try {
-          const controller = new AbortController();
-          const timer = window.setTimeout(() => controller.abort(), 9000);
-          const response = await fetch(source.url, {
-            signal: controller.signal,
-            mode: 'cors',
-          });
-          window.clearTimeout(timer);
-          if (!response.ok) return [];
-          const text = await response.text();
-          loadedPlaylists += 1;
-          return parseM3uPlaylist(text, source);
-        } catch {
-          return [];
-        }
-      })
-    );
+    const fetchOne = async (source: PlaylistSource): Promise<EntertainmentChannel[]> => {
+      try {
+        const controller = new AbortController();
+        const timer = window.setTimeout(() => controller.abort(), 10000);
+        const response = await fetch(source.url, {
+          signal: controller.signal,
+          mode: 'cors',
+        });
+        window.clearTimeout(timer);
+        if (!response.ok) return [];
+        const text = await response.text();
+        loadedPlaylists += 1;
+        return parseM3uPlaylist(text, source);
+      } catch {
+        return [];
+      }
+    };
 
-    // 3. Score and deduplicate parsed channels, preferring English/international entertainment names & HD feeds
+    const wave1 = await Promise.all(PLAYLIST_SOURCES.slice(0, 6).map(fetchOne));
+    const wave2 = await Promise.all(PLAYLIST_SOURCES.slice(6).map(fetchOne));
+    const allBatches = [...wave1, ...wave2];
+
+    // 3. Deduplicate strictly by HTTPS stream URL while preserving multi-category membership
     const parsedPool: EntertainmentChannel[] = [];
-    for (const batch of fetchedBatches) {
+    for (const batch of allBatches) {
       for (const ch of batch) {
-        const normUrl = ch.url.trim();
-        const normName = ch.name.toLowerCase().replace(/[^a-z0-9]+/g, '');
-        if (seenUrls.has(normUrl) || seenNames.has(normName)) continue;
-        seenUrls.add(normUrl);
-        seenNames.add(normName);
+        const existing = byUrl.get(ch.url);
+        if (existing) {
+          if (!existing.categories.includes(ch.category)) {
+            existing.categories.push(ch.category);
+          }
+          if (!existing.logo && ch.logo) {
+            existing.logo = ch.logo;
+          }
+          continue;
+        }
+        byUrl.set(ch.url, ch);
         parsedPool.push(ch);
       }
     }
 
-    const scoreChannel = (ch: EntertainmentChannel): number => {
-      let score = 0;
-      if (isLatinFriendlyName(ch.name)) score += 30;
-      if (ENGLISH_PRIORITY_HINT_REGEX.test(ch.name)) score += 25;
-      if (ch.resolution === '1080p') score += 12;
-      else if (ch.resolution === '720p') score += 8;
-      if (ch.logo) score += 5;
-      if (ch.url.includes('cloudfront.net') || ch.url.includes('akamaized.net') || ch.url.includes('amagi.tv')) {
-        score += 10;
-      }
-      return score;
-    };
-
+    // Sort parsed pool cleanly by quality score then alphabetical name (NO cap so total easily exceeds 1,000+)
     parsedPool.sort((a, b) => {
-      const diff = scoreChannel(b) - scoreChannel(a);
+      const diff = b.qualityScore - a.qualityScore;
       if (diff !== 0) return diff;
       return a.name.localeCompare(b.name);
     });
 
-    // Cap per category so the channel directory stays ultra-snappy on mobile and desktop (~220 channels total)
-    const perCategoryCap: Record<EntertainmentCategory, number> = {
-      entertainment: 65,
-      movies: 55,
-      cartoons: 45,
-      music: 55,
-    };
-    const perCategoryCount: Record<EntertainmentCategory, number> = {
-      entertainment: 0,
-      movies: 0,
-      cartoons: 0,
-      music: 0,
-    };
-
-    for (const ch of parsedPool) {
-      if (perCategoryCount[ch.category] >= perCategoryCap[ch.category]) continue;
-      perCategoryCount[ch.category] += 1;
-      merged.push(ch);
-    }
+    merged.push(...parsedPool);
 
     const result: EntertainmentPlaylistResult = {
       channels: merged,

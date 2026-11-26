@@ -2,19 +2,27 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Hls from 'hls.js';
 import {
   AlertTriangle,
+  Baby,
+  BookOpen,
   CheckCircle2,
   Clapperboard,
+  Compass,
   Film,
+  Heart,
+  Layers,
   Maximize,
   Minimize,
   Music,
+  Newspaper,
   Pause,
   Play,
   Radio,
   RefreshCw,
   Search,
   SkipForward,
+  Smile,
   Sparkles,
+  Trophy,
   Tv,
   Volume2,
   VolumeX,
@@ -22,30 +30,27 @@ import {
   XCircle,
 } from 'lucide-react';
 import {
+  CATEGORY_LABELS,
+  CATEGORY_TABS,
+  clearCachedChannelHealth,
+  getCachedHealthSnapshot,
   loadEntertainmentChannels,
+  probeHlsStream,
+  setCachedChannelHealth,
   VERIFIED_SPOTLIGHT_CHANNELS,
+  type CategoryFilter,
+  type ChannelHealth,
   type EntertainmentCategory,
   type EntertainmentChannel,
 } from '../services/entertainmentStreams';
 
-type CategoryFilter = 'all' | EntertainmentCategory;
 type StreamStatus = 'connecting' | 'playing' | 'buffering' | 'paused' | 'error';
-type ChannelHealth = 'working' | 'offline';
 
-const CATEGORY_TABS: readonly { id: CategoryFilter; label: string }[] = [
-  { id: 'all', label: 'All Entertainment' },
-  { id: 'entertainment', label: 'Entertainment' },
-  { id: 'cartoons', label: 'Cartoons & Anime' },
-  { id: 'movies', label: 'Movies' },
-  { id: 'music', label: 'Music' },
-];
-
-const CATEGORY_LABELS: Record<EntertainmentCategory, string> = {
-  entertainment: 'Entertainment',
-  cartoons: 'Cartoons',
-  movies: 'Movies',
-  music: 'Music',
-};
+const PAGE_BATCH_SIZE = 80;
+const PROBE_CONCURRENCY = 5;
+const PROBE_TIMEOUT_MS = 2800;
+const PROBE_BATCH_PAUSE_MS = 150;
+const MAX_AUTO_PROBES_PER_PASS = 260;
 
 function CategoryIcon({
   category,
@@ -55,12 +60,28 @@ function CategoryIcon({
   className?: string;
 }) {
   switch (category) {
+    case 'animation':
+      return <Sparkles className={className} aria-hidden="true" />;
     case 'movies':
       return <Film className={className} aria-hidden="true" />;
-    case 'cartoons':
-      return <Sparkles className={className} aria-hidden="true" />;
+    case 'sports':
+      return <Trophy className={className} aria-hidden="true" />;
+    case 'news':
+      return <Newspaper className={className} aria-hidden="true" />;
+    case 'family':
+      return <Heart className={className} aria-hidden="true" />;
     case 'music':
       return <Music className={className} aria-hidden="true" />;
+    case 'comedy':
+      return <Smile className={className} aria-hidden="true" />;
+    case 'documentary':
+      return <BookOpen className={className} aria-hidden="true" />;
+    case 'lifestyle':
+      return <Compass className={className} aria-hidden="true" />;
+    case 'kids':
+      return <Baby className={className} aria-hidden="true" />;
+    case 'series':
+      return <Layers className={className} aria-hidden="true" />;
     default:
       return <Clapperboard className={className} aria-hidden="true" />;
   }
@@ -76,11 +97,17 @@ export const EntertainmentLivePage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [hideOffline, setHideOffline] = useState<boolean>(false);
   const [autoSkipEnabled, setAutoSkipEnabled] = useState<boolean>(true);
+  const [visibleLimit, setVisibleLimit] = useState<number>(PAGE_BATCH_SIZE);
 
   const [selectedChannelId, setSelectedChannelId] = useState<string>(
     VERIFIED_SPOTLIGHT_CHANNELS[0]?.id || ''
   );
-  const [channelHealth, setChannelHealth] = useState<Record<string, ChannelHealth>>({});
+  const [channelHealth, setChannelHealth] = useState<Record<string, ChannelHealth>>(() =>
+    getCachedHealthSnapshot()
+  );
+  const [isScanningHealth, setIsScanningHealth] = useState<boolean>(false);
+  const [probeTrigger, setProbeTrigger] = useState<number>(0);
+
   const [failedBanner, setFailedBanner] = useState<{
     failedName: string;
     nextName?: string;
@@ -102,6 +129,7 @@ export const EntertainmentLivePage: React.FC = () => {
   const hlsRef = useRef<Hls | null>(null);
   const autoSkipTimerRef = useRef<number | null>(null);
   const consecutiveSkipsRef = useRef<number>(0);
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
 
   const isMutedRef = useRef<boolean>(isMuted);
   isMutedRef.current = isMuted;
@@ -109,10 +137,18 @@ export const EntertainmentLivePage: React.FC = () => {
   volumeRef.current = volume;
   const autoSkipEnabledRef = useRef<boolean>(autoSkipEnabled);
   autoSkipEnabledRef.current = autoSkipEnabled;
+  const channelHealthRef = useRef<Record<string, ChannelHealth>>(channelHealth);
+  channelHealthRef.current = channelHealth;
+  const activeCategoryRef = useRef<CategoryFilter>(activeCategory);
+  activeCategoryRef.current = activeCategory;
 
-  // Fetch live iptv-org M3U playlists (entertainment, movies, animation, music) on mount
+  // Fetch all 12 public iptv-org HTTPS HLS playlists (1,000+ unique streams)
   const fetchPlaylists = useCallback(async (forceRefresh = false) => {
     setIsLoadingPlaylist(true);
+    if (forceRefresh) {
+      clearCachedChannelHealth();
+      setChannelHealth({});
+    }
     try {
       const result = await loadEntertainmentChannels(forceRefresh);
       setChannels(result.channels);
@@ -123,6 +159,7 @@ export const EntertainmentLivePage: React.FC = () => {
         }
         return result.channels[0]?.id || '';
       });
+      setProbeTrigger((n) => n + 1);
     } finally {
       setIsLoadingPlaylist(false);
     }
@@ -132,64 +169,307 @@ export const EntertainmentLivePage: React.FC = () => {
     void fetchPlaylists(false);
   }, [fetchPlaylists]);
 
+  // Reset pagination window whenever category or search filter changes
+  useEffect(() => {
+    setVisibleLimit(PAGE_BATCH_SIZE);
+  }, [activeCategory, searchQuery, hideOffline]);
+
+  // Non-blocking, batched background stream health checker:
+  // Prioritizes active category first, then round-robins across all 12 categories so EVERY tab gets verified Live channels at the top.
+  useEffect(() => {
+    if (channels.length === 0) return;
+
+    const abortController = new AbortController();
+    let cancelled = false;
+
+    const buildProbeQueue = (): EntertainmentChannel[] => {
+      const health = channelHealthRef.current;
+      const queuedIds = new Set<string>();
+      const queue: EntertainmentChannel[] = [];
+
+      const pushIfUntested = (ch: EntertainmentChannel) => {
+        if (queuedIds.has(ch.id) || health[ch.id]) return;
+        queuedIds.add(ch.id);
+        queue.push(ch);
+      };
+
+      // 1. Prioritize spotlight & currently active category top candidates first
+      for (const ch of channels) {
+        if (ch.featured) pushIfUntested(ch);
+      }
+
+      const currentCat = activeCategoryRef.current;
+      if (currentCat !== 'all') {
+        let catCount = 0;
+        for (const ch of channels) {
+          if (ch.categories.includes(currentCat)) {
+            pushIfUntested(ch);
+            catCount += 1;
+            if (catCount >= 40) break;
+          }
+        }
+      }
+
+      // 2. Round-robin across all 12 categories so every category tab receives verified Live channels
+      const buckets: EntertainmentChannel[][] = CATEGORY_TABS.filter((t) => t.id !== 'all').map(
+        (t) =>
+          channels
+            .filter(
+              (ch) =>
+                ch.categories.includes(t.id as EntertainmentCategory) &&
+                !queuedIds.has(ch.id) &&
+                !health[ch.id]
+            )
+            .slice(0, 24)
+      );
+
+      let depth = 0;
+      while (queue.length < MAX_AUTO_PROBES_PER_PASS) {
+        let addedAny = false;
+        for (const bucket of buckets) {
+          if (depth < bucket.length) {
+            pushIfUntested(bucket[depth]);
+            addedAny = true;
+            if (queue.length >= MAX_AUTO_PROBES_PER_PASS) break;
+          }
+        }
+        if (!addedAny) break;
+        depth += 1;
+      }
+
+      return queue;
+    };
+
+    const runBackgroundProbes = async () => {
+      const queue = buildProbeQueue();
+      if (queue.length === 0) {
+        setIsScanningHealth(false);
+        return;
+      }
+
+      setIsScanningHealth(true);
+
+      for (let i = 0; i < queue.length; i += PROBE_CONCURRENCY) {
+        if (cancelled || abortController.signal.aborted) break;
+
+        const batch = queue.slice(i, i + PROBE_CONCURRENCY);
+        const batchResults = await Promise.all(
+          batch.map(async (ch) => {
+            // Skip if HLS.js already marked it working/offline while waiting in queue
+            if (channelHealthRef.current[ch.id]) {
+              return null;
+            }
+            const res = await probeHlsStream(ch.url, PROBE_TIMEOUT_MS, abortController.signal);
+            return { id: ch.id, status: res };
+          })
+        );
+
+        if (cancelled || abortController.signal.aborted) break;
+
+        const updates: Record<string, ChannelHealth> = {};
+        let hasNewUpdate = false;
+        for (const item of batchResults) {
+          if (!item) continue;
+          // Never overwrite a channel confirmed playing via HLS.js with a failed probe
+          if (channelHealthRef.current[item.id] === 'working') continue;
+          updates[item.id] = item.status;
+          setCachedChannelHealth(item.id, item.status);
+          hasNewUpdate = true;
+        }
+
+        if (hasNewUpdate) {
+          setChannelHealth((prev) => ({ ...prev, ...updates }));
+        }
+
+        // Brief pause between small batches keeps mobile UI & active HLS playback lag-free
+        if (i + PROBE_CONCURRENCY < queue.length) {
+          await new Promise<void>((resolve) => {
+            const t = window.setTimeout(resolve, PROBE_BATCH_PAUSE_MS);
+            abortController.signal.addEventListener(
+              'abort',
+              () => {
+                window.clearTimeout(t);
+                resolve();
+              },
+              { once: true }
+            );
+          });
+        }
+      }
+
+      if (!cancelled) {
+        setIsScanningHealth(false);
+      }
+    };
+
+    // Delay start slightly so initial HLS playback gets full network bandwidth first
+    const startDelay = window.setTimeout(() => {
+      if (!cancelled) {
+        void runBackgroundProbes();
+      }
+    }, 600);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(startDelay);
+      abortController.abort();
+    };
+  }, [channels, activeCategory, probeTrigger]);
+
   const selectedChannel = useMemo(
     () => channels.find((c) => c.id === selectedChannelId) || channels[0] || null,
     [channels, selectedChannelId]
   );
 
-  // Category counts for segmented filter buttons
-  const categoryCounts = useMemo(() => {
+  // Category counts & verified-live counts per tab
+  const { categoryCounts, categoryLiveCounts } = useMemo(() => {
     const counts: Record<CategoryFilter, number> = {
       all: channels.length,
-      entertainment: 0,
-      cartoons: 0,
+      animation: 0,
       movies: 0,
+      family: 0,
+      sports: 0,
+      news: 0,
+      entertainment: 0,
       music: 0,
+      comedy: 0,
+      documentary: 0,
+      lifestyle: 0,
+      kids: 0,
+      series: 0,
     };
-    for (const ch of channels) {
-      counts[ch.category] += 1;
-    }
-    return counts;
-  }, [channels]);
+    const liveCounts: Record<CategoryFilter, number> = {
+      all: 0,
+      animation: 0,
+      movies: 0,
+      family: 0,
+      sports: 0,
+      news: 0,
+      entertainment: 0,
+      music: 0,
+      comedy: 0,
+      documentary: 0,
+      lifestyle: 0,
+      kids: 0,
+      series: 0,
+    };
 
-  // Filtered channel directory (never grouped by country)
-  const visibleChannels = useMemo(() => {
+    for (const ch of channels) {
+      const isLive = channelHealth[ch.id] === 'working';
+      if (isLive) liveCounts.all += 1;
+      for (const cat of ch.categories) {
+        counts[cat] += 1;
+        if (isLive) liveCounts[cat] += 1;
+      }
+    }
+    return { categoryCounts: counts, categoryLiveCounts: liveCounts };
+  }, [channels, channelHealth]);
+
+  // Filtered & auto-sorted channel directory (never grouped by country):
+  // Rank 0 = Verified Working ("Live") at the very top, Rank 1 = Untested, Rank 2 = Offline at the bottom
+  const sortedFilteredChannels = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return channels.filter((ch) => {
-      if (activeCategory !== 'all' && ch.category !== activeCategory) return false;
+
+    const filtered = channels.filter((ch) => {
+      if (activeCategory !== 'all' && !ch.categories.includes(activeCategory)) return false;
       if (hideOffline && channelHealth[ch.id] === 'offline') return false;
       if (q) {
-        const hay = `${ch.name} ${CATEGORY_LABELS[ch.category]} ${ch.resolution || ''}`.toLowerCase();
+        const catText = ch.categories.map((c) => CATEGORY_LABELS[c]).join(' ');
+        const hay = `${ch.name} ${catText} ${ch.resolution || ''}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     });
+
+    const rankOf = (ch: EntertainmentChannel): number => {
+      const h = channelHealth[ch.id];
+      if (h === 'working') return 0;
+      if (h === 'offline') return 2;
+      return 1;
+    };
+
+    return filtered.sort((a, b) => {
+      const rankDiff = rankOf(a) - rankOf(b);
+      if (rankDiff !== 0) return rankDiff;
+      if (a.featured !== b.featured) return a.featured ? -1 : 1;
+      if (b.qualityScore !== a.qualityScore) return b.qualityScore - a.qualityScore;
+      return a.name.localeCompare(b.name);
+    });
   }, [channels, activeCategory, hideOffline, channelHealth, searchQuery]);
 
-  // Find next playable (non-offline) channel for quick switch & auto-skip
+  const renderedChannels = useMemo(
+    () => sortedFilteredChannels.slice(0, visibleLimit),
+    [sortedFilteredChannels, visibleLimit]
+  );
+
+  // Smooth infinite scroll for 1,000+ channels inside the channel list
+  useEffect(() => {
+    const sentinel = loadMoreSentinelRef.current;
+    if (!sentinel || visibleLimit >= sortedFilteredChannels.length) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisibleLimit((prev) =>
+            Math.min(prev + PAGE_BATCH_SIZE, sortedFilteredChannels.length)
+          );
+        }
+      },
+      { rootMargin: '180px' }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [visibleLimit, sortedFilteredChannels.length]);
+
+  // Quick-switch spotlight cards: prefer verified working channels first across categories
+  const quickSwitchChannels = useMemo(() => {
+    const verified = sortedFilteredChannels.filter((c) => channelHealth[c.id] === 'working');
+    if (verified.length >= 8) return verified.slice(0, 8);
+    const seen = new Set(verified.map((c) => c.id));
+    const merged = [...verified];
+    for (const spot of VERIFIED_SPOTLIGHT_CHANNELS) {
+      if (!seen.has(spot.id) && channelHealth[spot.id] !== 'offline') {
+        seen.add(spot.id);
+        merged.push(spot);
+      }
+      if (merged.length >= 8) break;
+    }
+    return merged.slice(0, 8);
+  }, [sortedFilteredChannels, channelHealth]);
+
+  // Find next working channel: strictly prefers already-verified 'working' channels first, then untested
   const findNextWorkingChannel = useCallback(
-    (excludeId: string, healthSnapshot: Record<string, ChannelHealth>): EntertainmentChannel | null => {
-      const pool = visibleChannels.length > 1 ? visibleChannels : channels;
+    (
+      excludeId: string,
+      healthSnapshot: Record<string, ChannelHealth>
+    ): EntertainmentChannel | null => {
+      const pool = sortedFilteredChannels.length > 1 ? sortedFilteredChannels : channels;
       if (pool.length === 0) return null;
       const currentIdx = pool.findIndex((c) => c.id === excludeId);
       const startIdx = currentIdx >= 0 ? currentIdx + 1 : 0;
 
-      // 1st pass: prefer confirmed working or untested channels
+      // 1st pass: verified working channels in current view
+      for (let offset = 0; offset < pool.length; offset++) {
+        const candidate = pool[(startIdx + offset) % pool.length];
+        if (candidate.id !== excludeId && healthSnapshot[candidate.id] === 'working') {
+          return candidate;
+        }
+      }
+      // 2nd pass: verified working channels across full 1,000+ catalog
+      for (const candidate of channels) {
+        if (candidate.id !== excludeId && healthSnapshot[candidate.id] === 'working') {
+          return candidate;
+        }
+      }
+      // 3rd pass: untested channels in current view
       for (let offset = 0; offset < pool.length; offset++) {
         const candidate = pool[(startIdx + offset) % pool.length];
         if (candidate.id !== excludeId && healthSnapshot[candidate.id] !== 'offline') {
           return candidate;
         }
       }
-      // 2nd pass: fallback across full channel list if current filter had no untested streams
-      for (const candidate of channels) {
-        if (candidate.id !== excludeId && healthSnapshot[candidate.id] !== 'offline') {
-          return candidate;
-        }
-      }
       return null;
     },
-    [channels, visibleChannels]
+    [channels, sortedFilteredChannels]
   );
 
   const selectChannel = useCallback((channel: EntertainmentChannel, isManual = true) => {
@@ -205,7 +485,6 @@ export const EntertainmentLivePage: React.FC = () => {
     setUnstableDetail(null);
     setSelectedChannelId((prevId) => {
       if (prevId === channel.id) {
-        // Explicit re-tap on the same channel: trigger a deliberate reload
         setStatus('connecting');
         setRetryNonce((n) => n + 1);
       } else {
@@ -248,7 +527,7 @@ export const EntertainmentLivePage: React.FC = () => {
     }
   }, []);
 
-  // Keep latest callbacks & metadata in refs so filtering/searching/health updates NEVER tear down active HLS playback
+  // Keep latest callbacks in refs so background health-check updates & sorting NEVER restart active HLS playback
   const findNextWorkingChannelRef = useRef(findNextWorkingChannel);
   findNextWorkingChannelRef.current = findNextWorkingChannel;
   const selectChannelRef = useRef(selectChannel);
@@ -261,7 +540,7 @@ export const EntertainmentLivePage: React.FC = () => {
   const activeChannelId = selectedChannel?.id || '';
   const activeChannelUrl = selectedChannel?.url || '';
 
-  // Attach HLS.js (or Safari native HLS) strictly keyed on activeChannelId + activeChannelUrl + retryNonce
+  // Stable HLS.js Player Effect — strictly keyed ONLY on activeChannelId, activeChannelUrl, and retryNonce
   useEffect(() => {
     if (!activeChannelId || !activeChannelUrl) return;
     const video = videoRef.current;
@@ -272,7 +551,6 @@ export const EntertainmentLivePage: React.FC = () => {
     let hasStartedPlayback = false;
     let lastProgressTime = 0;
 
-    // Cooldown-guarded recovery counters to prevent rapid stutter/reload glitch loops
     let mediaRecoveryAttempts = 0;
     let lastMediaRecoveryAt = 0;
     let networkRecoveryAttempts = 0;
@@ -332,6 +610,7 @@ export const EntertainmentLivePage: React.FC = () => {
       setStatus('error');
       setUnstableDetail(null);
       setErrorReason(reason);
+      setCachedChannelHealth(activeChannelId, 'offline');
 
       const channelName = selectedChannelNameRef.current || 'Channel';
       setChannelHealth((prev) => {
@@ -365,7 +644,7 @@ export const EntertainmentLivePage: React.FC = () => {
       });
     };
 
-    // Short 2.6-second stability check before declaring a channel failed or auto-skipping
+    // Short 2.6-second stability check before declaring a stream failed or auto-skipping
     const beginStabilityCheck = (detail: string, finalReason: string) => {
       if (cancelled || failureFinalized) return;
       setStatus('buffering');
@@ -379,6 +658,7 @@ export const EntertainmentLivePage: React.FC = () => {
       }, STABILITY_CHECK_MS);
     };
 
+    // Mark stream as confirmed working whenever HLS.js plays it smoothly
     const markStreamHealthy = () => {
       if (cancelled || failureFinalized) return;
       if (connectTimeout !== null) {
@@ -400,12 +680,12 @@ export const EntertainmentLivePage: React.FC = () => {
       setUnstableDetail(null);
       setErrorReason(null);
       setFailedBanner(null);
+      setCachedChannelHealth(activeChannelId, 'working');
       setChannelHealth((prev) =>
         prev[activeChannelId] === 'working' ? prev : { ...prev, [activeChannelId]: 'working' }
       );
     };
 
-    // Clean up any previous HLS.js instance
     if (hlsRef.current) {
       try {
         hlsRef.current.destroy();
@@ -423,13 +703,12 @@ export const EntertainmentLivePage: React.FC = () => {
       // Ignore
     }
 
-    // Initial connection timeout -> enters short 2.6s stability check before failing
     connectTimeout = window.setTimeout(() => {
       connectTimeout = null;
       if (!cancelled && !failureFinalized && !hasStartedPlayback && video.readyState < 2) {
         beginStabilityCheck(
           'Stream slow to respond — checking stability…',
-          'This entertainment stream timed out, is offline, or blocked by broadcaster CORS.'
+          'This live stream timed out, is offline, or blocked by broadcaster CORS.'
         );
       }
     }, INITIAL_CONNECT_TIMEOUT_MS);
@@ -472,7 +751,6 @@ export const EntertainmentLivePage: React.FC = () => {
         stallTimer = null;
         if (cancelled || failureFinalized || video.paused) return;
 
-        // First stall: gently request next fragments without resetting the entire player
         if (!stallRecoveryUsed && hlsRef.current) {
           stallRecoveryUsed = true;
           setUnstableDetail('Buffering / Stream unstable — recovering feed…');
@@ -518,7 +796,6 @@ export const EntertainmentLivePage: React.FC = () => {
     if (Hls.isSupported()) {
       const hls = new Hls({
         enableWorker: true,
-        // Disable aggressive LL-HLS edge chasing so standard public IPTV streams play smoothly
         lowLatencyMode: false,
         backBufferLength: 60,
         maxBufferLength: 60,
@@ -550,7 +827,6 @@ export const EntertainmentLivePage: React.FC = () => {
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (cancelled || failureFinalized) return;
 
-        // Handle non-fatal stalls & fragment hiccups gently without tearing down the stream
         if (!data.fatal) {
           if (
             data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR ||
@@ -565,7 +841,6 @@ export const EntertainmentLivePage: React.FC = () => {
           return;
         }
 
-        // Fatal MEDIA_ERROR: recover gracefully with cooldown so it never enters a rapid glitch loop
         if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
           const nowMs = Date.now();
           if (mediaRecoveryAttempts < 2 && nowMs - lastMediaRecoveryAt >= 4000) {
@@ -591,7 +866,6 @@ export const EntertainmentLivePage: React.FC = () => {
           return;
         }
 
-        // Fatal NETWORK_ERROR: distinguish permanent 403/404 from transient drops
         if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
           const httpStatus = data.response?.code;
           const isHardBlocked = httpStatus === 403 || httpStatus === 404 || httpStatus === 410;
@@ -627,7 +901,6 @@ export const EntertainmentLivePage: React.FC = () => {
           return;
         }
 
-        // Any other fatal error -> run short stability check before failing/auto-skipping
         beginStabilityCheck(
           'Stream unstable — checking if feed recovers…',
           'Channel stream is offline or unavailable on this network.'
@@ -765,6 +1038,7 @@ export const EntertainmentLivePage: React.FC = () => {
     setUnstableDetail(null);
     setErrorReason(null);
     setStatus('connecting');
+    clearCachedChannelHealth(selectedChannel.id);
     setChannelHealth((prev) => {
       const next = { ...prev };
       delete next[selectedChannel.id];
@@ -783,6 +1057,8 @@ export const EntertainmentLivePage: React.FC = () => {
     [channelHealth]
   );
 
+  const checkedCount = workingCount + offlineCount;
+
   return (
     <div className="space-y-6">
       {/* 1. Entertainment Live Top Summary Strip */}
@@ -791,11 +1067,21 @@ export const EntertainmentLivePage: React.FC = () => {
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
             <span className="font-semibold text-fuchsia-300">Entertainment Live</span>
             <span aria-hidden="true">·</span>
-            <span>Movies, Cartoons, Music &amp; Shows</span>
-            <span aria-hidden="true">·</span>
             <span className="tabular-nums text-cyan-300">
-              {channels.length} HTTPS HLS channels
+              {channels.length.toLocaleString()} HTTPS HLS channels
             </span>
+            <span aria-hidden="true">·</span>
+            <span className="tabular-nums text-emerald-300">
+              {workingCount} Live verified
+            </span>
+            {isScanningHealth && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="tabular-nums text-amber-300">
+                  Scanning ({checkedCount} checked)
+                </span>
+              </>
+            )}
           </div>
           <h1 className="mt-1 truncate text-xl font-bold tracking-tight text-white sm:text-2xl [text-wrap:balance]">
             {selectedChannel ? selectedChannel.name : 'Entertainment Live Broadcast'}
@@ -803,7 +1089,12 @@ export const EntertainmentLivePage: React.FC = () => {
           <p className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-slate-400 sm:text-sm">
             {selectedChannel ? (
               <>
-                <span>{CATEGORY_LABELS[selectedChannel.category]}</span>
+                <span>
+                  {selectedChannel.categories
+                    .slice(0, 3)
+                    .map((c) => CATEGORY_LABELS[c])
+                    .join(' / ')}
+                </span>
                 {selectedChannel.resolution && (
                   <>
                     <span aria-hidden="true">·</span>
@@ -814,7 +1105,7 @@ export const EntertainmentLivePage: React.FC = () => {
                 <span>{selectedChannel.sourceLabel}</span>
               </>
             ) : (
-              <span>Loading public HTTPS entertainment playlists…</span>
+              <span>Loading 12 public HTTPS HLS category playlists…</span>
             )}
           </p>
         </div>
@@ -840,17 +1131,70 @@ export const EntertainmentLivePage: React.FC = () => {
               className={`h-3.5 w-3.5 text-cyan-300 ${isLoadingPlaylist ? 'animate-spin' : ''}`}
               aria-hidden="true"
             />
-            <span>Refresh List</span>
+            <span>Refresh All</span>
           </button>
         </div>
       </section>
 
-      {/* 2. Primary Workspace: 16:9 Live Video Player + Side-by-Side Channel Directory */}
-      <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1.45fr)_420px]">
+      {/* 2. Clear Category Filter Bar (All 12 Categories + All, Zero Country Grouping) */}
+      <section aria-label="Broadcast categories" className="space-y-2">
+        <div
+          role="tablist"
+          aria-label="Filter live channels by category"
+          className="no-scrollbar flex items-center gap-1.5 overflow-x-auto pb-1"
+        >
+          {CATEGORY_TABS.map((tab) => {
+            const isActive = activeCategory === tab.id;
+            const totalInTab = categoryCounts[tab.id];
+            const liveInTab = categoryLiveCounts[tab.id];
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => setActiveCategory(tab.id)}
+                className={`inline-flex h-10 items-center gap-2 rounded-xl px-3.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${
+                  isActive
+                    ? 'bg-sky-500 text-slate-950 shadow-[0_0_20px_-8px_rgba(56,189,248,0.8)]'
+                    : 'border border-white/10 bg-[#071022]/85 text-slate-200 hover:border-sky-400/45 hover:bg-slate-900 hover:text-white'
+                }`}
+              >
+                {tab.id !== 'all' && (
+                  <CategoryIcon
+                    category={tab.id}
+                    className={`h-3.5 w-3.5 ${isActive ? 'text-slate-950' : 'text-cyan-300'}`}
+                  />
+                )}
+                <span>{tab.label}</span>
+                <span
+                  className={`tabular-nums text-[11px] font-medium ${
+                    isActive ? 'text-slate-900/80' : 'text-slate-400'
+                  }`}
+                >
+                  {totalInTab.toLocaleString()}
+                </span>
+                {liveInTab > 0 && (
+                  <span
+                    className={`tabular-nums text-[10px] font-bold ${
+                      isActive ? 'text-emerald-950' : 'text-emerald-300'
+                    }`}
+                  >
+                    · {liveInTab} Live
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* 3. Primary Workspace: 16:9 Live Video Player + Side-by-Side 1,000+ Channel Directory */}
+      <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1.45fr)_440px]">
         {/* Left: Live HLS Video Player */}
         <div className="space-y-4">
           <section
-            aria-label="Entertainment live HLS video player"
+            aria-label="Live HLS video player"
             ref={playerFrameRef}
             className="overflow-hidden rounded-3xl border border-sky-400/35 bg-[#040814] shadow-[0_24px_64px_-22px_rgba(14,165,233,0.4)]"
           >
@@ -1088,35 +1432,31 @@ export const EntertainmentLivePage: React.FC = () => {
             </div>
           </section>
 
-          {/* Compact Playback & Source Info Strip */}
+          {/* Compact Source & Verification Status Strip */}
           <section className="flex flex-col justify-between gap-2 rounded-2xl border border-white/[0.08] bg-slate-900/60 px-5 py-3.5 text-xs text-slate-300 sm:flex-row sm:items-center">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="font-semibold text-white">Public Entertainment Feeds</span>
+              <span className="font-semibold text-white">Auto-Sorted Live Streams</span>
               <span aria-hidden="true" className="text-slate-600">
                 ·
               </span>
               <span className="tabular-nums text-slate-400">
                 {loadedPlaylistsCount > 0
-                  ? `${loadedPlaylistsCount} iptv-org playlists synced (News excluded)`
-                  : 'Curated HTTPS HLS spotlight active'}
+                  ? `${loadedPlaylistsCount}/12 iptv-org playlists merged`
+                  : 'Verified HTTPS HLS spotlight active'}
               </span>
-              {workingCount > 0 && (
-                <>
-                  <span aria-hidden="true" className="text-slate-600">
-                    ·
-                  </span>
-                  <span className="tabular-nums text-emerald-300">
-                    {workingCount} verified playable
-                  </span>
-                </>
-              )}
+              <span aria-hidden="true" className="text-slate-600">
+                ·
+              </span>
+              <span className="tabular-nums text-emerald-300">
+                {workingCount} Live sorted to top
+              </span>
               {offlineCount > 0 && (
                 <>
                   <span aria-hidden="true" className="text-slate-600">
                     ·
                   </span>
                   <span className="tabular-nums text-rose-300">
-                    {offlineCount} marked offline
+                    {offlineCount} offline moved below
                   </span>
                 </>
               )}
@@ -1126,18 +1466,22 @@ export const EntertainmentLivePage: React.FC = () => {
             </span>
           </section>
 
-          {/* Quick-Switch Instant Spotlight Strip */}
-          <section aria-label="Quick switch spotlight entertainment channels" className="space-y-3">
+          {/* Quick-Switch Live Channels Strip */}
+          <section aria-label="Quick switch verified live channels" className="space-y-3">
             <div className="flex items-center justify-between gap-2">
               <h2 className="flex items-center gap-2 text-sm font-bold text-white">
                 <Tv className="h-4 w-4 text-fuchsia-400" aria-hidden="true" />
-                <span>Quick-Switch Spotlight</span>
+                <span>
+                  {activeCategory === 'all'
+                    ? 'Quick-Switch Live Spotlight'
+                    : `Top Working · ${CATEGORY_LABELS[activeCategory]}`}
+                </span>
               </h2>
-              <span className="text-xs text-slate-400">Verified HTTPS HLS feeds</span>
+              <span className="text-xs text-slate-400">One-tap verified streams</span>
             </div>
 
             <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 md:grid-cols-4">
-              {VERIFIED_SPOTLIGHT_CHANNELS.slice(0, 8).map((ch) => {
+              {quickSwitchChannels.map((ch) => {
                 const isActive = selectedChannel?.id === ch.id;
                 const health = channelHealth[ch.id];
                 return (
@@ -1148,9 +1492,7 @@ export const EntertainmentLivePage: React.FC = () => {
                     className={`flex items-center gap-2.5 rounded-2xl border p-3 text-left transition-colors ${
                       isActive
                         ? 'border-fuchsia-400/60 bg-fuchsia-500/18 text-white'
-                        : health === 'offline'
-                          ? 'border-rose-400/20 bg-slate-950/60 text-slate-500 hover:border-rose-400/35'
-                          : 'border-white/[0.08] bg-slate-900/65 text-slate-200 hover:border-sky-400/40 hover:bg-slate-900'
+                        : 'border-white/[0.08] bg-slate-900/65 text-slate-200 hover:border-sky-400/40 hover:bg-slate-900'
                     }`}
                   >
                     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white/[0.07] text-cyan-300">
@@ -1160,7 +1502,11 @@ export const EntertainmentLivePage: React.FC = () => {
                       <p className="truncate text-xs font-bold">{ch.name}</p>
                       <p className="truncate text-[11px] text-slate-400">
                         {CATEGORY_LABELS[ch.category]}
-                        {health === 'offline' ? ' · Offline' : ch.resolution ? ` · ${ch.resolution}` : ''}
+                        {health === 'working'
+                          ? ' · Live'
+                          : ch.resolution
+                            ? ` · ${ch.resolution}`
+                            : ''}
                       </p>
                     </div>
                   </button>
@@ -1170,22 +1516,33 @@ export const EntertainmentLivePage: React.FC = () => {
           </section>
         </div>
 
-        {/* Right: Filterable, Searchable Entertainment Channel List (No Country Grouping) */}
+        {/* Right: Auto-Sorted, Searchable 1,000+ Channel Directory (No Country Grouping) */}
         <aside
-          aria-label="Entertainment channels directory"
-          className="flex flex-col overflow-hidden rounded-3xl border border-white/[0.1] bg-[#071022]/90 xl:max-h-[760px]"
+          aria-label="Live channels directory"
+          className="flex flex-col overflow-hidden rounded-3xl border border-white/[0.1] bg-[#071022]/90 xl:max-h-[820px]"
         >
           <div className="space-y-3 border-b border-white/[0.08] p-4">
             <div className="flex items-center justify-between gap-2">
-              <h2 className="text-sm font-bold text-white">
-                Playable Channels
-              </h2>
-              <span className="tabular-nums text-xs text-slate-400">
-                {visibleChannels.length} shown
-              </span>
+              <div className="min-w-0">
+                <h2 className="truncate text-sm font-bold text-white">
+                  {activeCategory === 'all'
+                    ? 'All Live Channels'
+                    : `${CATEGORY_LABELS[activeCategory]} Channels`}
+                </h2>
+                <p className="tabular-nums text-[11px] text-slate-400">
+                  {sortedFilteredChannels.length.toLocaleString()} channels · Verified Live sorted
+                  first
+                </p>
+              </div>
+              {isScanningHealth && (
+                <span className="inline-flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-cyan-300">
+                  <RefreshCw className="h-3 w-3 animate-spin" aria-hidden="true" />
+                  <span>Checking</span>
+                </span>
+              )}
             </div>
 
-            {/* Live Channel Search */}
+            {/* Instant Search Input */}
             <div className="relative">
               <Search
                 className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400"
@@ -1195,15 +1552,15 @@ export const EntertainmentLivePage: React.FC = () => {
                 type="search"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search movies, cartoons, music, shows..."
-                aria-label="Search entertainment channels"
+                placeholder="Search 1,000+ channels (movies, anime, sports, news...)"
+                aria-label="Search live channels"
                 className="h-10 w-full rounded-xl border border-white/12 bg-slate-950/90 pr-9 pl-10 text-xs text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-400/20"
               />
               {searchQuery && (
                 <button
                   type="button"
                   onClick={() => setSearchQuery('')}
-                  aria-label="Clear entertainment search"
+                  aria-label="Clear channel search"
                   className="absolute top-1/2 right-2.5 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-400 hover:bg-white/10 hover:text-white"
                 >
                   <X className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1211,72 +1568,50 @@ export const EntertainmentLivePage: React.FC = () => {
               )}
             </div>
 
-            {/* Category Filter Buttons */}
-            <div
-              role="tablist"
-              aria-label="Filter entertainment channels by genre"
-              className="no-scrollbar flex items-center gap-1.5 overflow-x-auto pb-0.5"
-            >
-              {CATEGORY_TABS.map((tab) => {
-                const isActive = activeCategory === tab.id;
-                return (
+            {/* Offline Filter & Re-Scan Controls */}
+            <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400">
+              <span className="tabular-nums">
+                {categoryLiveCounts[activeCategory]} Live verified
+                {offlineCount > 0 ? ` · ${offlineCount} offline` : ''}
+              </span>
+              <div className="flex items-center gap-3">
+                {offlineCount > 0 && (
                   <button
-                    key={tab.id}
                     type="button"
-                    role="tab"
-                    aria-selected={isActive}
-                    onClick={() => setActiveCategory(tab.id)}
-                    className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                      isActive
-                        ? 'bg-sky-500 text-slate-950'
-                        : 'border border-white/10 bg-slate-950/70 text-slate-300 hover:border-sky-400/35 hover:text-white'
-                    }`}
+                    onClick={() => setHideOffline((v) => !v)}
+                    className="font-semibold text-cyan-300 hover:text-cyan-200"
                   >
-                    <span>{tab.label}</span>
-                    <span
-                      className={`tabular-nums text-[11px] ${
-                        isActive ? 'text-slate-900/75' : 'text-slate-500'
-                      }`}
-                    >
-                      {categoryCounts[tab.id]}
-                    </span>
+                    {hideOffline ? 'Show offline' : 'Hide offline'}
                   </button>
-                );
-              })}
-            </div>
-
-            {/* Offline Filter Toggle */}
-            {offlineCount > 0 && (
-              <div className="flex items-center justify-between pt-0.5 text-[11px] text-slate-400">
-                <span className="tabular-nums">
-                  {offlineCount} channel{offlineCount === 1 ? '' : 's'} marked offline
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setHideOffline((v) => !v)}
-                  className="font-semibold text-cyan-300 hover:text-cyan-200"
-                >
-                  {hideOffline ? 'Show offline channels' : 'Hide offline channels'}
-                </button>
+                )}
+                {!isScanningHealth && channels.length > checkedCount && (
+                  <button
+                    type="button"
+                    onClick={() => setProbeTrigger((n) => n + 1)}
+                    className="font-semibold text-sky-300 hover:text-sky-200"
+                  >
+                    Scan more
+                  </button>
+                )}
               </div>
-            )}
+            </div>
           </div>
 
-          {/* Scrollable Channel Rows */}
+          {/* Scrollable Windowed Channel Rows */}
           <div className="flex-1 divide-y divide-white/[0.05] overflow-y-auto">
             {isLoadingPlaylist && channels.length <= VERIFIED_SPOTLIGHT_CHANNELS.length && (
               <div className="flex items-center justify-between gap-2 bg-sky-500/10 px-4 py-2.5 text-xs text-sky-200">
-                <span>Loading live iptv-org playlists…</span>
+                <span>Loading 1,000+ channels across 12 playlists…</span>
                 <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
               </div>
             )}
 
-            {visibleChannels.length === 0 ? (
+            {renderedChannels.length === 0 ? (
               <div className="flex flex-col items-center justify-center px-6 py-12 text-center">
                 <Clapperboard className="h-7 w-7 text-slate-500" aria-hidden="true" />
                 <p className="mt-3 text-sm font-semibold text-white">No channels match</p>
                 <p className="mt-1 text-xs text-slate-400">
-                  Try clearing your search or switching back to All Entertainment.
+                  Try clearing your search or switching back to All categories.
                 </p>
                 <button
                   type="button"
@@ -1291,102 +1626,121 @@ export const EntertainmentLivePage: React.FC = () => {
                 </button>
               </div>
             ) : (
-              visibleChannels.map((ch) => {
-                const isSelected = selectedChannel?.id === ch.id;
-                const health = channelHealth[ch.id];
-                const showLogo = Boolean(ch.logo && !brokenLogos[ch.id]);
+              <>
+                {renderedChannels.map((ch) => {
+                  const isSelected = selectedChannel?.id === ch.id;
+                  const health = channelHealth[ch.id];
+                  const showLogo = Boolean(ch.logo && !brokenLogos[ch.id]);
 
-                return (
-                  <button
-                    key={ch.id}
-                    type="button"
-                    onClick={() => selectChannel(ch, true)}
-                    className={`flex w-full items-center gap-3 px-4 py-3 text-left transition-colors ${
-                      isSelected
-                        ? 'bg-sky-500/18 text-white'
-                        : health === 'offline'
-                          ? 'bg-transparent text-slate-500 hover:bg-white/[0.03]'
-                          : 'bg-transparent text-slate-200 hover:bg-white/[0.05]'
-                    }`}
-                  >
-                    {/* Channel Logo or Clean Fallback Icon */}
-                    <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-slate-950/90">
-                      {showLogo ? (
-                        <img
-                          src={ch.logo}
-                          alt={ch.name}
-                          referrerPolicy="no-referrer"
-                          loading="lazy"
-                          onError={() =>
-                            setBrokenLogos((prev) => ({ ...prev, [ch.id]: true }))
-                          }
-                          className="h-8 w-8 object-contain"
-                        />
-                      ) : (
-                        <CategoryIcon
-                          category={ch.category}
-                          className={`h-4 w-4 ${
-                            isSelected ? 'text-sky-300' : 'text-slate-400'
-                          }`}
-                        />
-                      )}
-                    </div>
-
-                    {/* Title & Clean Unboxed Metadata */}
-                    <div className="min-w-0 flex-1">
-                      <p
-                        className={`truncate text-xs font-bold sm:text-[13px] ${
-                          health === 'offline'
-                            ? 'text-slate-500 line-through'
-                            : 'text-white'
-                        }`}
-                      >
-                        {ch.name}
-                      </p>
-                      <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-slate-400">
-                        <span>{CATEGORY_LABELS[ch.category]}</span>
-                        {ch.resolution && (
-                          <>
-                            <span aria-hidden="true">·</span>
-                            <span className="tabular-nums">{ch.resolution}</span>
-                          </>
-                        )}
-                        {health === 'working' && (
-                          <>
-                            <span aria-hidden="true">·</span>
-                            <span className="inline-flex items-center gap-1 text-emerald-300">
-                              <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
-                              Live
-                            </span>
-                          </>
-                        )}
-                        {health === 'offline' && (
-                          <>
-                            <span aria-hidden="true">·</span>
-                            <span className="inline-flex items-center gap-1 text-rose-400">
-                              <XCircle className="h-3 w-3" aria-hidden="true" />
-                              Offline
-                            </span>
-                          </>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Action Affordance */}
-                    <span
-                      className={`shrink-0 text-[11px] font-semibold ${
+                  return (
+                    <button
+                      key={ch.id}
+                      type="button"
+                      onClick={() => selectChannel(ch, true)}
+                      className={`flex w-full items-center gap-3 px-4 py-3 text-left transition-colors ${
                         isSelected
-                          ? 'text-sky-300'
+                          ? 'bg-sky-500/18 text-white'
                           : health === 'offline'
-                            ? 'text-slate-500'
-                            : 'text-cyan-300'
+                            ? 'bg-transparent text-slate-500 hover:bg-white/[0.03]'
+                            : 'bg-transparent text-slate-200 hover:bg-white/[0.05]'
                       }`}
                     >
-                      {isSelected ? 'Playing' : 'Watch'}
-                    </span>
-                  </button>
-                );
-              })
+                      {/* Channel Logo or Category Icon Fallback */}
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-slate-950/90">
+                        {showLogo ? (
+                          <img
+                            src={ch.logo}
+                            alt={ch.name}
+                            referrerPolicy="no-referrer"
+                            loading="lazy"
+                            onError={() =>
+                              setBrokenLogos((prev) => ({ ...prev, [ch.id]: true }))
+                            }
+                            className="h-8 w-8 object-contain"
+                          />
+                        ) : (
+                          <CategoryIcon
+                            category={ch.category}
+                            className={`h-4 w-4 ${
+                              isSelected ? 'text-sky-300' : 'text-slate-400'
+                            }`}
+                          />
+                        )}
+                      </div>
+
+                      {/* Title & Clean Metadata with Explicit Live / Offline Status */}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <p
+                            className={`truncate text-xs font-bold sm:text-[13px] ${
+                              health === 'offline'
+                                ? 'text-slate-500 line-through'
+                                : 'text-white'
+                            }`}
+                          >
+                            {ch.name}
+                          </p>
+                          {health === 'working' && (
+                            <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-400/40 bg-emerald-500/18 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300">
+                              <CheckCircle2 className="h-2.5 w-2.5" aria-hidden="true" />
+                              Live
+                            </span>
+                          )}
+                        </div>
+                        <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-slate-400">
+                          <span className="truncate">{CATEGORY_LABELS[ch.category]}</span>
+                          {ch.resolution && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="tabular-nums shrink-0">{ch.resolution}</span>
+                            </>
+                          )}
+                          {health === 'offline' && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="inline-flex shrink-0 items-center gap-1 text-rose-400">
+                                <XCircle className="h-3 w-3" aria-hidden="true" />
+                                Offline
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Action Affordance */}
+                      <span
+                        className={`shrink-0 text-[11px] font-semibold ${
+                          isSelected
+                            ? 'text-sky-300'
+                            : health === 'offline'
+                              ? 'text-slate-500'
+                              : 'text-cyan-300'
+                        }`}
+                      >
+                        {isSelected ? 'Playing' : 'Watch'}
+                      </span>
+                    </button>
+                  );
+                })}
+
+                {/* Smooth Infinite Scroll Sentinel + Manual Load More */}
+                {visibleLimit < sortedFilteredChannels.length && (
+                  <div ref={loadMoreSentinelRef} className="p-4 text-center">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setVisibleLimit((prev) =>
+                          Math.min(prev + PAGE_BATCH_SIZE, sortedFilteredChannels.length)
+                        )
+                      }
+                      className="inline-flex h-9 items-center justify-center rounded-xl border border-white/14 bg-white/[0.06] px-4 text-xs font-semibold text-slate-200 transition-colors hover:border-sky-400/40 hover:bg-white/[0.12] hover:text-white tabular-nums"
+                    >
+                      Load more ({(sortedFilteredChannels.length - visibleLimit).toLocaleString()}{' '}
+                      remaining)
+                    </button>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </aside>
