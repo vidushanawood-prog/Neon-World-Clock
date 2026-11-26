@@ -139,6 +139,9 @@ const PLAYLIST_SOURCES: readonly PlaylistSource[] = [
   },
 ];
 
+const FREE_TV_PLAYLIST_URL =
+  'https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8';
+
 /**
  * Verified CORS-friendly HTTPS HLS (.m3u8) spotlight channels seeded first so playback
  * starts instantaneously while all 12 iptv-org playlists download and background verification runs.
@@ -280,6 +283,76 @@ export const VERIFIED_SPOTLIGHT_CHANNELS: readonly EntertainmentChannel[] = [
 
 const BLOCKED_TAGS_REGEX = /\[(geo-blocked|not\s*24\/7|offline)\]/i;
 
+const FREE_TV_GEO_MARKER_REGEX = /Ⓖ/;
+
+const CATEGORY_INFERENCE_RULES: readonly {
+  category: EntertainmentCategory;
+  pattern: RegExp;
+}[] = [
+  {
+    category: 'news',
+    pattern:
+      /\b(news|cnn|bbc\s*news|bbc\s*world|sky\s*news|fox\s*news|msnbc|cnbc|bloomberg|al\s*jazeera|aljazeera|euronews|france\s*24|france24|dw\b|nhk\s*world|cgtn|wion|ndtv|notic|noticias|telediario|actualit|nachrichten|tagesschau|novosti|vesti|khabar|akhbar|haber|inform|bfm|cnews|lci|trt\s*world|arirang|cna\b|press\s*tv|newsmax|24h|info\s*tv|weather)\b/i,
+  },
+  {
+    category: 'sports',
+    pattern:
+      /\b(sport|sports|espn|nfl|nba|mlb|nhl|fifa|uefa|golf|tennis|racing|motorsport|f1|boxing|mma|ufc|wrestling|cricket|soccer|football|futebol|futbol|eurosport|beIN|bein|dazn|red\s*bull|outdoor|fight)\b/i,
+  },
+  {
+    category: 'animation',
+    pattern: /\b(anime|cartoon|toon|animax|animation|manga|looney|boomer)\b/i,
+  },
+  {
+    category: 'kids',
+    pattern:
+      /\b(kids|kid|junior|nick|disney|cbbc|cbeebies|baby|pogo|kika|gulli|pakapaka|clan|boing|super\s*rtl|children|toddler)\b/i,
+  },
+  {
+    category: 'movies',
+    pattern:
+      /\b(movie|movies|cinema|film|films|hollywood|bollywood|cine|action|thriller|horror|sci-?fi|western|hallmark|flix|box\s*office)\b/i,
+  },
+  {
+    category: 'music',
+    pattern:
+      /\b(music|mtv|vh1|vevo|hits|pop|rock|jazz|hip\s*hop|rap|edm|dance|club|concert|melody|beats|trace|kiss\s*tv|deluxe\s*music|mezzo|stingray|jukebox|radio\s*vision|fm\s*tv|viva|muzik|musica|musique)\b/i,
+  },
+  {
+    category: 'comedy',
+    pattern: /\b(comedy|humor|humour|funny|laugh|stand-?up|sitcom|gag|failarmy)\b/i,
+  },
+  {
+    category: 'documentary',
+    pattern:
+      /\b(docu|documentary|history|nature|science|discovery|nat\s*geo|national\s*geographic|planet|earth|wildlife|space|nasa|arte|curiosity|smithsonian)\b/i,
+  },
+  {
+    category: 'lifestyle',
+    pattern:
+      /\b(lifestyle|food|cooking|kitchen|travel|fashion|home|garden|design|health|fitness|wellness|beauty|auto|motor|tastemade)\b/i,
+  },
+  {
+    category: 'family',
+    pattern: /\b(family|familia|famille|classic\s*tv|retro|general\s*family)\b/i,
+  },
+  {
+    category: 'series',
+    pattern: /\b(series|drama|novela|telenovela|crime|mystery|soap)\b/i,
+  },
+];
+
+function inferFreeTvCategories(name: string, tvgId: string): EntertainmentCategory[] {
+  const haystack = `${name} ${tvgId}`;
+  const matched: EntertainmentCategory[] = [];
+  for (const rule of CATEGORY_INFERENCE_RULES) {
+    if (rule.pattern.test(haystack)) {
+      matched.push(rule.category);
+    }
+  }
+  return matched.length > 0 ? matched : ['entertainment'];
+}
+
 const PRIORITY_BRAND_REGEX =
   /\b(english|usa|uk|hollywood|classic|cartoon|anime|movies|cinema|music|hits|comedy|action|retro|thriller|drama|sci-?fi|kids|family|flix|sports|espn|nfl|nba|fifa|documentary|history|nature|science|lifestyle|food|travel|series|dw|france\s*24|nhk|euronews|al\s*jazeera|sky|abc|cbs|nbc|pluto|plex|30a|red\s*bull)\b/i;
 
@@ -294,6 +367,7 @@ function cleanChannelTitle(rawTitle: string): { name: string; resolution?: strin
   const cleaned = rawTitle
     .replace(/\(\d{3,4}p\)/gi, '')
     .replace(/\[[^\]]*\]/g, '')
+    .replace(/[ⓈⒼⓎⓉ]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
   return { name: cleaned, resolution };
@@ -410,6 +484,71 @@ function parseM3uPlaylist(
       logo,
       resolution,
       sourceLabel: `IPTV-Org · ${source.label}`,
+      featured: false,
+      qualityScore,
+    });
+  }
+
+  return parsed;
+}
+
+function parseFreeTvPlaylist(rawText: string): EntertainmentChannel[] {
+  const lines = rawText.split(/\r?\n/);
+  const parsed: EntertainmentChannel[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line.startsWith('#EXTINF:')) continue;
+
+    let urlLine = '';
+    let j = i + 1;
+    while (j < lines.length) {
+      const candidate = lines[j].trim();
+      if (!candidate) {
+        j++;
+        continue;
+      }
+      if (candidate.startsWith('#EXTINF:')) {
+        break;
+      }
+      if (!candidate.startsWith('#')) {
+        urlLine = candidate;
+        break;
+      }
+      j++;
+    }
+
+    if (!isStrictHttpsHlsUrl(urlLine)) continue;
+
+    const commaIndex = line.lastIndexOf(',');
+    const rawTitle = commaIndex >= 0 ? line.slice(commaIndex + 1).trim() : '';
+    const tvgName = extractAttr(line, 'tvg-name');
+    const titleSource = rawTitle || tvgName;
+    if (!titleSource || BLOCKED_TAGS_REGEX.test(titleSource)) continue;
+
+    const tvgId = extractAttr(line, 'tvg-id');
+    const logo = isSafeHttpsImage(extractAttr(line, 'tvg-logo'));
+    const isGeoMarked = FREE_TV_GEO_MARKER_REGEX.test(titleSource);
+    const { name, resolution } = cleanChannelTitle(titleSource);
+    if (!name || name.length < 2) continue;
+
+    const categories = inferFreeTvCategories(name, tvgId);
+    const primaryCategory = categories[0];
+    const baseScore = computeQualityScore(name, urlLine, resolution, logo);
+    const qualityScore = isGeoMarked ? baseScore - 15 : baseScore + 4;
+
+    parsed.push({
+      id: `freetv-${primaryCategory}-${parsed.length}-${name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .slice(0, 24)}`,
+      name,
+      url: urlLine,
+      category: primaryCategory,
+      categories,
+      logo,
+      resolution,
+      sourceLabel: 'Free-TV IPTV',
       featured: false,
       qualityScore,
     });
@@ -548,9 +687,30 @@ export async function loadEntertainmentChannels(
       }
     };
 
+    const fetchFreeTv = async (): Promise<EntertainmentChannel[]> => {
+      try {
+        const controller = new AbortController();
+        const timer = window.setTimeout(() => controller.abort(), 12000);
+        const response = await fetch(FREE_TV_PLAYLIST_URL, {
+          signal: controller.signal,
+          mode: 'cors',
+        });
+        window.clearTimeout(timer);
+        if (!response.ok) return [];
+        const text = await response.text();
+        loadedPlaylists += 1;
+        return parseFreeTvPlaylist(text);
+      } catch {
+        return [];
+      }
+    };
+
     const wave1 = await Promise.all(PLAYLIST_SOURCES.slice(0, 6).map(fetchOne));
-    const wave2 = await Promise.all(PLAYLIST_SOURCES.slice(6).map(fetchOne));
-    const allBatches = [...wave1, ...wave2];
+    const [freeTvBatch, ...wave2] = await Promise.all([
+      fetchFreeTv(),
+      ...PLAYLIST_SOURCES.slice(6).map(fetchOne),
+    ]);
+    const allBatches = [...wave1, ...wave2, freeTvBatch];
 
     // 3. Deduplicate strictly by HTTPS stream URL while preserving multi-category membership
     const parsedPool: EntertainmentChannel[] = [];
@@ -558,8 +718,10 @@ export async function loadEntertainmentChannels(
       for (const ch of batch) {
         const existing = byUrl.get(ch.url);
         if (existing) {
-          if (!existing.categories.includes(ch.category)) {
-            existing.categories.push(ch.category);
+          for (const cat of ch.categories) {
+            if (!existing.categories.includes(cat)) {
+              existing.categories.push(cat);
+            }
           }
           if (!existing.logo && ch.logo) {
             existing.logo = ch.logo;
@@ -583,7 +745,7 @@ export async function loadEntertainmentChannels(
     const result: EntertainmentPlaylistResult = {
       channels: merged,
       loadedPlaylists,
-      totalPlaylists: PLAYLIST_SOURCES.length,
+      totalPlaylists: PLAYLIST_SOURCES.length + 1,
       usedFallbackOnly: loadedPlaylists === 0,
       fetchedAt: Date.now(),
     };

@@ -93,6 +93,7 @@ export const EntertainmentLivePage: React.FC = () => {
   ]);
   const [isLoadingPlaylist, setIsLoadingPlaylist] = useState<boolean>(true);
   const [loadedPlaylistsCount, setLoadedPlaylistsCount] = useState<number>(0);
+  const [totalPlaylistsCount, setTotalPlaylistsCount] = useState<number>(13);
   const [activeCategory, setActiveCategory] = useState<CategoryFilter>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [hideOffline, setHideOffline] = useState<boolean>(false);
@@ -153,6 +154,7 @@ export const EntertainmentLivePage: React.FC = () => {
       const result = await loadEntertainmentChannels(forceRefresh);
       setChannels(result.channels);
       setLoadedPlaylistsCount(result.loadedPlaylists);
+      setTotalPlaylistsCount(result.totalPlaylists);
       setSelectedChannelId((current) => {
         if (current && result.channels.some((c) => c.id === current)) {
           return current;
@@ -1441,7 +1443,7 @@ export const EntertainmentLivePage: React.FC = () => {
               </span>
               <span className="tabular-nums text-slate-400">
                 {loadedPlaylistsCount > 0
-                  ? `${loadedPlaylistsCount}/12 iptv-org playlists merged`
+                  ? `${loadedPlaylistsCount}/${totalPlaylistsCount} playlists merged (iptv-org + Free-TV)`
                   : 'Verified HTTPS HLS spotlight active'}
               </span>
               <span aria-hidden="true" className="text-slate-600">
@@ -1601,7 +1603,7 @@ export const EntertainmentLivePage: React.FC = () => {
           <div className="flex-1 divide-y divide-white/[0.05] overflow-y-auto">
             {isLoadingPlaylist && channels.length <= VERIFIED_SPOTLIGHT_CHANNELS.length && (
               <div className="flex items-center justify-between gap-2 bg-sky-500/10 px-4 py-2.5 text-xs text-sky-200">
-                <span>Loading 1,000+ channels across 12 playlists…</span>
+                <span>Loading 1,000+ channels across {totalPlaylistsCount} playlists…</span>
                 <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
               </div>
             )}
