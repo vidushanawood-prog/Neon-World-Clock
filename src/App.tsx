@@ -367,22 +367,20 @@ export default function App() {
     return focusedCountry;
   }, [countryByIso, focusedCountry, route]);
 
-  // Single 60fps-friendly requestAnimationFrame clock loop (fires state update only on second flip)
+  // Drift-aligned 1-second clock timer (fires only on second boundaries instead of waking the main thread 60x/sec)
   useEffect(() => {
-    let rafId = 0;
-    let lastSecond = Math.floor(Date.now() / 1000);
+    let timerId = 0;
 
-    const tick = () => {
-      const currentSecond = Math.floor(Date.now() / 1000);
-      if (currentSecond !== lastSecond) {
-        lastSecond = currentSecond;
+    const scheduleNextTick = () => {
+      const msUntilNextSecond = 1005 - (Date.now() % 1000);
+      timerId = window.setTimeout(() => {
         setNow(new Date());
-      }
-      rafId = window.requestAnimationFrame(tick);
+        scheduleNextTick();
+      }, msUntilNextSecond);
     };
 
-    rafId = window.requestAnimationFrame(tick);
-    return () => window.cancelAnimationFrame(rafId);
+    scheduleNextTick();
+    return () => window.clearTimeout(timerId);
   }, []);
 
   // Load live exchange rates once on mount (6h TTL cached)
@@ -423,8 +421,15 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Poll live ISS position every 6 seconds (graceful orbital fallback if offline)
+  // Only run live orbital polling & propagation on views that display the globe or satellite telemetry
+  const isOrbitalViewActive =
+    entryStage === 'landing' ||
+    (entryStage === 'dashboard' &&
+      (route.page === 'home' || route.page === 'satellites' || route.page === 'country'));
+
+  // Poll live ISS position every 6 seconds on orbital views (graceful orbital fallback if offline)
   useEffect(() => {
+    if (!isOrbitalViewActive) return;
     let cancelled = false;
     const poll = () => {
       fetchIssPosition().then((pos) => {
@@ -437,7 +442,7 @@ export default function App() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, []);
+  }, [isOrbitalViewActive]);
 
   // Persist user preferences
   useEffect(() => {
@@ -564,10 +569,10 @@ export default function App() {
     }
   }, [entryStage, now, alarms, hourlyChimeEnabled, localTz, is24Hour, showToast, countryByIso]);
 
-  // Live orbital satellite constellation (ISS + LEO/SSO/MEO/GEO fleet)
+  // Live orbital satellite constellation (ISS + LEO/SSO/MEO/GEO fleet; paused on non-orbital pages)
   const liveSatellites = useMemo(
-    () => propagateSatellites(now.getTime(), issPosition),
-    [now, issPosition]
+    () => (isOrbitalViewActive ? propagateSatellites(now.getTime(), issPosition) : []),
+    [isOrbitalViewActive, now, issPosition]
   );
 
   // Determine exact instant displayed across all clocks
@@ -821,6 +826,11 @@ export default function App() {
     [anthemController, navigate, route.page, triggerVoiceLines]
   );
 
+  const handleClockCardFocusGlobe = useCallback(
+    (country: Country) => handleFocusGlobe(country, true),
+    [handleFocusGlobe]
+  );
+
   const handleOpenCountryPage = useCallback(
     (country: Country) => {
       setMenuOpen(false);
@@ -941,6 +951,38 @@ export default function App() {
       totalMatched: continentMatches.length,
     };
   }, [activeTab, searchQuery, sortMode, offsetMap, pinnedSet, pinnedIsos, pinnedCountriesOrdered]);
+
+  // Progressive windowing for the 215-country Home grid so scrolling & per-second clock ticks stay smooth
+  const HOME_GRID_BATCH_SIZE = 36;
+  const [homeVisibleCount, setHomeVisibleCount] = useState<number>(HOME_GRID_BATCH_SIZE);
+  const homeLoadMoreRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setHomeVisibleCount(HOME_GRID_BATCH_SIZE);
+  }, [activeTab, searchQuery, sortMode]);
+
+  const renderedRegularCountries = useMemo(
+    () => regularVisible.slice(0, homeVisibleCount),
+    [regularVisible, homeVisibleCount]
+  );
+
+  useEffect(() => {
+    if (entryStage !== 'dashboard' || route.page !== 'home') return;
+    const sentinel = homeLoadMoreRef.current;
+    if (!sentinel || homeVisibleCount >= regularVisible.length) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setHomeVisibleCount((prev) =>
+            Math.min(prev + HOME_GRID_BATCH_SIZE, regularVisible.length)
+          );
+        }
+      },
+      { rootMargin: '280px' }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [entryStage, route.page, homeVisibleCount, regularVisible.length]);
 
   // Smart batched Open-Meteo weather prefetching (only runs on Home / Booting so sub-pages stay crisp)
   useEffect(() => {
@@ -1236,7 +1278,7 @@ export default function App() {
     if (route.page === 'entertainment-live') {
       return renderDedicatedSubPage(
         'Entertainment Live',
-        '1,000+ live HLS channels across Movies, Cartoons, Sports, News, Music & more',
+        '10,000+ live HLS channels across Movies, Cartoons, Sports, News, Music & more',
         <EntertainmentLivePage />
       );
     }
@@ -1857,7 +1899,7 @@ export default function App() {
                         rates={fxState.rates}
                         onTogglePin={handleTogglePin}
                         onCopy={handleCopyCard}
-                        onFocusGlobe={(c) => handleFocusGlobe(c, true)}
+                        onFocusGlobe={handleClockCardFocusGlobe}
                         onOpenDetails={handleOpenCountryPage}
                       />
                     ))}
@@ -1893,7 +1935,7 @@ export default function App() {
                   </div>
 
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                    {regularVisible.map((country) => (
+                    {renderedRegularCountries.map((country) => (
                       <ClockCard
                         key={country.iso}
                         country={country}
@@ -1910,11 +1952,28 @@ export default function App() {
                         rates={fxState.rates}
                         onTogglePin={handleTogglePin}
                         onCopy={handleCopyCard}
-                        onFocusGlobe={(c) => handleFocusGlobe(c, true)}
+                        onFocusGlobe={handleClockCardFocusGlobe}
                         onOpenDetails={handleOpenCountryPage}
                       />
                     ))}
                   </div>
+
+                  {homeVisibleCount < regularVisible.length && (
+                    <div ref={homeLoadMoreRef} className="mt-6 flex justify-center">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setHomeVisibleCount((prev) =>
+                            Math.min(prev + HOME_GRID_BATCH_SIZE, regularVisible.length)
+                          )
+                        }
+                        className="inline-flex h-10 items-center justify-center rounded-xl border border-slate-200 bg-white px-5 text-xs font-semibold text-slate-700 transition-colors hover:border-sky-400/50 hover:text-sky-600 dark:border-white/12 dark:bg-white/[0.05] dark:text-slate-200 dark:hover:border-sky-400/45 dark:hover:bg-white/[0.1] dark:hover:text-white tabular-nums"
+                      >
+                        Show more countries (
+                        {(regularVisible.length - homeVisibleCount).toLocaleString()} remaining)
+                      </button>
+                    </div>
+                  )}
                 </section>
               )}
             </div>
@@ -2074,7 +2133,7 @@ export default function App() {
               <div className="min-w-0">
                 <p>Entertainment Live</p>
                 <p className="truncate text-[11px] font-normal text-slate-400">
-                  1,000+ channels · Movies, Cartoons, Sports, News &amp; Music
+                  10,000+ channels · Movies, Cartoons, Sports, News &amp; Music
                 </p>
               </div>
             </button>

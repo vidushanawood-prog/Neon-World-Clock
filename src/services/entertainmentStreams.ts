@@ -22,13 +22,15 @@ export interface EntertainmentChannel {
   url: string;
   /** Primary category for display */
   category: EntertainmentCategory;
-  /** All category playlists that include this stream URL (preserved during URL deduplication) */
+  /** All category tabs this stream belongs to (preserved during URL deduplication) */
   categories: EntertainmentCategory[];
   logo?: string;
   resolution?: string;
   sourceLabel: string;
   featured?: boolean;
   qualityScore: number;
+  /** Pre-computed lowercase search haystack for lag-free filtering across 10,000+ channels */
+  searchText: string;
 }
 
 export interface EntertainmentPlaylistResult {
@@ -70,81 +72,57 @@ export const CATEGORY_LABELS: Record<EntertainmentCategory, string> = {
   series: 'Series',
 };
 
-interface PlaylistSource {
-  category: EntertainmentCategory;
+interface MasterPlaylistSource {
+  id: 'iptv-org' | 'free-tv' | 'pluto' | 'tubi';
   label: string;
   url: string;
+  timeoutMs: number;
 }
 
-const PLAYLIST_SOURCES: readonly PlaylistSource[] = [
+/**
+ * 4 verified HTTP-200 CORS-open GitHub master playlists delivering 10,000+ unique HTTPS HLS (.m3u8) channels
+ * across Movies, Cartoons & Anime, Kids, Entertainment, Sports, News, Music, Comedy, Documentary, Family, Lifestyle & Series.
+ */
+const MASTER_PLAYLIST_SOURCES: readonly MasterPlaylistSource[] = [
   {
-    category: 'animation',
-    label: 'Cartoons & Anime',
-    url: 'https://iptv-org.github.io/iptv/categories/animation.m3u',
+    id: 'iptv-org',
+    label: 'IPTV-Org Global',
+    url: 'https://iptv-org.github.io/iptv/index.category.m3u',
+    timeoutMs: 15000,
   },
   {
-    category: 'movies',
-    label: 'Movies',
-    url: 'https://iptv-org.github.io/iptv/categories/movies.m3u',
+    id: 'free-tv',
+    label: 'Free-TV IPTV',
+    url: 'https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8',
+    timeoutMs: 14000,
   },
   {
-    category: 'family',
-    label: 'Family',
-    url: 'https://iptv-org.github.io/iptv/categories/family.m3u',
+    id: 'pluto',
+    label: 'Pluto TV Live',
+    url: 'https://raw.githubusercontent.com/BuddyChewChew/app-m3u-generator/main/playlists/plutotv_all.m3u',
+    timeoutMs: 14000,
   },
   {
-    category: 'sports',
-    label: 'Sports',
-    url: 'https://iptv-org.github.io/iptv/categories/sports.m3u',
-  },
-  {
-    category: 'news',
-    label: 'News',
-    url: 'https://iptv-org.github.io/iptv/categories/news.m3u',
-  },
-  {
-    category: 'entertainment',
-    label: 'Entertainment',
-    url: 'https://iptv-org.github.io/iptv/categories/entertainment.m3u',
-  },
-  {
-    category: 'music',
-    label: 'Music',
-    url: 'https://iptv-org.github.io/iptv/categories/music.m3u',
-  },
-  {
-    category: 'comedy',
-    label: 'Comedy',
-    url: 'https://iptv-org.github.io/iptv/categories/comedy.m3u',
-  },
-  {
-    category: 'documentary',
-    label: 'Documentary',
-    url: 'https://iptv-org.github.io/iptv/categories/documentary.m3u',
-  },
-  {
-    category: 'lifestyle',
-    label: 'Lifestyle',
-    url: 'https://iptv-org.github.io/iptv/categories/lifestyle.m3u',
-  },
-  {
-    category: 'kids',
-    label: 'Kids',
-    url: 'https://iptv-org.github.io/iptv/categories/kids.m3u',
-  },
-  {
-    category: 'series',
-    label: 'Series',
-    url: 'https://iptv-org.github.io/iptv/categories/series.m3u',
+    id: 'tubi',
+    label: 'Tubi Live TV',
+    url: 'https://raw.githubusercontent.com/BuddyChewChew/app-m3u-generator/main/playlists/tubi_all.m3u',
+    timeoutMs: 12000,
   },
 ];
 
-const FREE_TV_PLAYLIST_URL =
-  'https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8';
+function buildSearchText(
+  name: string,
+  categories: readonly EntertainmentCategory[],
+  sourceLabel: string,
+  resolution?: string
+): string {
+  const catNames = categories.map((c) => CATEGORY_LABELS[c]).join(' ');
+  return `${name} ${catNames} ${sourceLabel} ${resolution || ''}`.toLowerCase();
+}
 
 /**
  * Verified CORS-friendly HTTPS HLS (.m3u8) spotlight channels seeded first so playback
- * starts instantaneously while all 12 iptv-org playlists download and background verification runs.
+ * starts instantaneously while the 10,000+ channel master playlists load in parallel.
  */
 export const VERIFIED_SPOTLIGHT_CHANNELS: readonly EntertainmentChannel[] = [
   {
@@ -157,6 +135,7 @@ export const VERIFIED_SPOTLIGHT_CHANNELS: readonly EntertainmentChannel[] = [
     sourceLabel: 'Spotlight · Sports & Entertainment',
     featured: true,
     qualityScore: 100,
+    searchText: buildSearchText('Red Bull TV', ['sports', 'entertainment'], 'Spotlight', '1080p'),
   },
   {
     id: 'spotlight-24h-free-movies',
@@ -168,6 +147,7 @@ export const VERIFIED_SPOTLIGHT_CHANNELS: readonly EntertainmentChannel[] = [
     sourceLabel: 'Spotlight · Movies',
     featured: true,
     qualityScore: 99,
+    searchText: buildSearchText('24 Hour Free Movies', ['movies', 'entertainment'], 'Spotlight', '720p'),
   },
   {
     id: 'spotlight-cartoon-cartoons',
@@ -179,6 +159,7 @@ export const VERIFIED_SPOTLIGHT_CHANNELS: readonly EntertainmentChannel[] = [
     sourceLabel: 'Spotlight · Cartoons & Anime',
     featured: true,
     qualityScore: 98,
+    searchText: buildSearchText('Cartoon Cartoons', ['animation', 'kids', 'family'], 'Spotlight', '720p'),
   },
   {
     id: 'spotlight-30a-tv',
@@ -190,6 +171,7 @@ export const VERIFIED_SPOTLIGHT_CHANNELS: readonly EntertainmentChannel[] = [
     sourceLabel: 'Spotlight · Entertainment',
     featured: true,
     qualityScore: 97,
+    searchText: buildSearchText('30A Television Channel', ['entertainment', 'lifestyle'], 'Spotlight', '720p'),
   },
   {
     id: 'spotlight-30a-classic-movies',
@@ -201,6 +183,7 @@ export const VERIFIED_SPOTLIGHT_CHANNELS: readonly EntertainmentChannel[] = [
     sourceLabel: 'Spotlight · Movies',
     featured: true,
     qualityScore: 96,
+    searchText: buildSearchText('30A TV Classic Movies', ['movies', 'family'], 'Spotlight', '720p'),
   },
   {
     id: 'spotlight-botflix-tv',
@@ -212,6 +195,7 @@ export const VERIFIED_SPOTLIGHT_CHANNELS: readonly EntertainmentChannel[] = [
     sourceLabel: 'Spotlight · Cartoons & Anime',
     featured: true,
     qualityScore: 95,
+    searchText: buildSearchText('Botflix Animation TV', ['animation', 'comedy'], 'Spotlight', '1080p'),
   },
   {
     id: 'spotlight-3abn-kids',
@@ -223,6 +207,7 @@ export const VERIFIED_SPOTLIGHT_CHANNELS: readonly EntertainmentChannel[] = [
     sourceLabel: 'Spotlight · Kids & Family',
     featured: true,
     qualityScore: 94,
+    searchText: buildSearchText('3ABN Kids', ['kids', 'family', 'animation'], 'Spotlight', '720p'),
   },
   {
     id: 'spotlight-9xm',
@@ -234,6 +219,7 @@ export const VERIFIED_SPOTLIGHT_CHANNELS: readonly EntertainmentChannel[] = [
     sourceLabel: 'Spotlight · Music',
     featured: true,
     qualityScore: 93,
+    searchText: buildSearchText('9XM Music', ['music', 'entertainment'], 'Spotlight', '1080p'),
   },
   {
     id: 'spotlight-9x-jalwa',
@@ -245,6 +231,7 @@ export const VERIFIED_SPOTLIGHT_CHANNELS: readonly EntertainmentChannel[] = [
     sourceLabel: 'Spotlight · Music',
     featured: true,
     qualityScore: 92,
+    searchText: buildSearchText('9X Jalwa Music', ['music'], 'Spotlight', '1080p'),
   },
   {
     id: 'spotlight-4-music',
@@ -256,6 +243,7 @@ export const VERIFIED_SPOTLIGHT_CHANNELS: readonly EntertainmentChannel[] = [
     sourceLabel: 'Spotlight · Music',
     featured: true,
     qualityScore: 91,
+    searchText: buildSearchText('4 Music Live', ['music'], 'Spotlight', '720p'),
   },
   {
     id: 'spotlight-4u-tv',
@@ -267,6 +255,7 @@ export const VERIFIED_SPOTLIGHT_CHANNELS: readonly EntertainmentChannel[] = [
     sourceLabel: 'Spotlight · Entertainment',
     featured: true,
     qualityScore: 90,
+    searchText: buildSearchText('4U TV Entertainment', ['entertainment', 'series'], 'Spotlight', '720p'),
   },
   {
     id: 'spotlight-adn-tv',
@@ -278,92 +267,124 @@ export const VERIFIED_SPOTLIGHT_CHANNELS: readonly EntertainmentChannel[] = [
     sourceLabel: 'Spotlight · Cartoons & Anime',
     featured: true,
     qualityScore: 89,
+    searchText: buildSearchText('ADN Anime TV+', ['animation', 'series'], 'Spotlight', '720p'),
   },
 ];
 
 const BLOCKED_TAGS_REGEX = /\[(geo-blocked|not\s*24\/7|offline)\]/i;
-
 const FREE_TV_GEO_MARKER_REGEX = /Ⓖ/;
+
+const GROUP_TITLE_TO_CATEGORY: Record<string, EntertainmentCategory> = {
+  animation: 'animation',
+  anime: 'animation',
+  cartoons: 'animation',
+  movies: 'movies',
+  movie: 'movies',
+  cinema: 'movies',
+  family: 'family',
+  sports: 'sports',
+  sport: 'sports',
+  news: 'news',
+  business: 'news',
+  weather: 'news',
+  legislative: 'news',
+  entertainment: 'entertainment',
+  general: 'entertainment',
+  music: 'music',
+  comedy: 'comedy',
+  documentary: 'documentary',
+  science: 'documentary',
+  education: 'documentary',
+  culture: 'documentary',
+  lifestyle: 'lifestyle',
+  cooking: 'lifestyle',
+  travel: 'lifestyle',
+  auto: 'lifestyle',
+  outdoor: 'lifestyle',
+  relax: 'lifestyle',
+  kids: 'kids',
+  series: 'series',
+  classic: 'series',
+};
 
 const CATEGORY_INFERENCE_RULES: readonly {
   category: EntertainmentCategory;
   pattern: RegExp;
 }[] = [
   {
+    category: 'animation',
+    pattern:
+      /\b(anime|cartoon|toon|animax|animation|manga|looney|boomer|pokemon|yu-gi-oh|naruto|one\s*piece|dragon\s*ball|lupin|transformers|ninja\s*turtles|tmnt|spongebob|garfield|smurfs|sonic|peppa|avatar)\b/i,
+  },
+  {
+    category: 'movies',
+    pattern:
+      /\b(movie|movies|cinema|film|films|hollywood|bollywood|cine|action|thriller|horror|sci-?fi|western|hallmark|flix|box\s*office|slasher|grindhouse|noir|romcom|blockbuster|drive-?in|spotlight|70s\s*cinema|80s\s*rewind|90s\s*throwback|00s\s*replay)\b/i,
+  },
+  {
+    category: 'kids',
+    pattern:
+      /\b(kids|kid|junior|nick|disney|cbbc|cbeebies|baby|pogo|kika|gulli|pakapaka|clan|boing|super\s*rtl|children|toddler|kartoon|teletubbies|ryan|sesame|barney)\b/i,
+  },
+  {
+    category: 'sports',
+    pattern:
+      /\b(sport|sports|espn|nfl|nba|mlb|nhl|fifa|uefa|golf|tennis|racing|motorsport|f1|boxing|mma|ufc|wrestling|wwe|cricket|soccer|football|futebol|futbol|eurosport|bein|dazn|red\s*bull|fight|nascar|pga|poker|billiards|surf|skate)\b/i,
+  },
+  {
     category: 'news',
     pattern:
       /\b(news|cnn|bbc\s*news|bbc\s*world|sky\s*news|fox\s*news|msnbc|cnbc|bloomberg|al\s*jazeera|aljazeera|euronews|france\s*24|france24|dw\b|nhk\s*world|cgtn|wion|ndtv|notic|noticias|telediario|actualit|nachrichten|tagesschau|novosti|vesti|khabar|akhbar|haber|inform|bfm|cnews|lci|trt\s*world|arirang|cna\b|press\s*tv|newsmax|24h|info\s*tv|weather)\b/i,
   },
   {
-    category: 'sports',
-    pattern:
-      /\b(sport|sports|espn|nfl|nba|mlb|nhl|fifa|uefa|golf|tennis|racing|motorsport|f1|boxing|mma|ufc|wrestling|cricket|soccer|football|futebol|futbol|eurosport|beIN|bein|dazn|red\s*bull|outdoor|fight)\b/i,
-  },
-  {
-    category: 'animation',
-    pattern: /\b(anime|cartoon|toon|animax|animation|manga|looney|boomer)\b/i,
-  },
-  {
-    category: 'kids',
-    pattern:
-      /\b(kids|kid|junior|nick|disney|cbbc|cbeebies|baby|pogo|kika|gulli|pakapaka|clan|boing|super\s*rtl|children|toddler)\b/i,
-  },
-  {
-    category: 'movies',
-    pattern:
-      /\b(movie|movies|cinema|film|films|hollywood|bollywood|cine|action|thriller|horror|sci-?fi|western|hallmark|flix|box\s*office)\b/i,
-  },
-  {
     category: 'music',
     pattern:
-      /\b(music|mtv|vh1|vevo|hits|pop|rock|jazz|hip\s*hop|rap|edm|dance|club|concert|melody|beats|trace|kiss\s*tv|deluxe\s*music|mezzo|stingray|jukebox|radio\s*vision|fm\s*tv|viva|muzik|musica|musique)\b/i,
+      /\b(music|mtv|vh1|vevo|hits|pop|rock|jazz|hip\s*hop|rap|edm|dance|club|concert|melody|beats|trace|kiss\s*tv|deluxe\s*music|mezzo|stingray|jukebox|radio\s*vision|fm\s*tv|viva|muzik|musica|musique|karaoke|k-?pop|country\s*music)\b/i,
   },
   {
     category: 'comedy',
-    pattern: /\b(comedy|humor|humour|funny|laugh|stand-?up|sitcom|gag|failarmy)\b/i,
+    pattern:
+      /\b(comedy|humor|humour|funny|laugh|stand-?up|sitcom|gag|failarmy|pet\s*collective|just\s*for\s*laughs|rifftrax|mst3k|improv|prank)\b/i,
   },
   {
     category: 'documentary',
     pattern:
-      /\b(docu|documentary|history|nature|science|discovery|nat\s*geo|national\s*geographic|planet|earth|wildlife|space|nasa|arte|curiosity|smithsonian)\b/i,
+      /\b(docu|documentary|history|nature|science|discovery|nat\s*geo|national\s*geographic|planet|earth|wildlife|space|nasa|arte|curiosity|smithsonian|biography|true\s*crime|forensic|unsolved|cold\s*case|48\s*hours|alien|ufo|ancient)\b/i,
   },
   {
     category: 'lifestyle',
     pattern:
-      /\b(lifestyle|food|cooking|kitchen|travel|fashion|home|garden|design|health|fitness|wellness|beauty|auto|motor|tastemade)\b/i,
+      /\b(lifestyle|food|cooking|kitchen|chef|travel|fashion|home|garden|design|health|fitness|wellness|beauty|auto|motor|tastemade|hgtv|diy|antique|real\s*estate|fishing|hunting|car|gear)\b/i,
   },
   {
     category: 'family',
-    pattern: /\b(family|familia|famille|classic\s*tv|retro|general\s*family)\b/i,
+    pattern: /\b(family|familia|famille|classic\s*tv|retro|game\s*show|price\s*is\s*right|jeopardy|wheel\s*of\s*fortune|deal\s*or\s*no\s*deal)\b/i,
   },
   {
     category: 'series',
-    pattern: /\b(series|drama|novela|telenovela|crime|mystery|soap)\b/i,
+    pattern:
+      /\b(series|drama|novela|telenovela|crime|mystery|soap|star\s*trek|doctor\s*who|baywatch|csi|ncis|law\s*&\s*order|walker|cop|cops|rescue|walking\s*dead|stargate|sherlock|detective)\b/i,
   },
 ];
 
-function inferFreeTvCategories(name: string, tvgId: string): EntertainmentCategory[] {
-  const haystack = `${name} ${tvgId}`;
-  const matched: EntertainmentCategory[] = [];
-  for (const rule of CATEGORY_INFERENCE_RULES) {
-    if (rule.pattern.test(haystack)) {
-      matched.push(rule.category);
-    }
-  }
-  return matched.length > 0 ? matched : ['entertainment'];
-}
-
 const PRIORITY_BRAND_REGEX =
-  /\b(english|usa|uk|hollywood|classic|cartoon|anime|movies|cinema|music|hits|comedy|action|retro|thriller|drama|sci-?fi|kids|family|flix|sports|espn|nfl|nba|fifa|documentary|history|nature|science|lifestyle|food|travel|series|dw|france\s*24|nhk|euronews|al\s*jazeera|sky|abc|cbs|nbc|pluto|plex|30a|red\s*bull)\b/i;
+  /\b(english|usa|uk|hollywood|classic|cartoon|anime|movies|cinema|music|hits|comedy|action|retro|thriller|drama|sci-?fi|kids|family|flix|sports|espn|nfl|nba|fifa|documentary|history|nature|science|lifestyle|food|travel|series|dw|france\s*24|nhk|euronews|al\s*jazeera|sky|abc|cbs|nbc|pluto|plex|tubi|30a|red\s*bull|vevo|mtv|nick|disney)\b/i;
 
-function extractAttr(line: string, attrName: string): string {
-  const match = line.match(new RegExp(`${attrName}="([^"]*)"`, 'i'));
-  return match ? match[1].trim() : '';
+function extractAttrFast(line: string, keyWithEqQuote: string): string {
+  const idx = line.indexOf(keyWithEqQuote);
+  if (idx === -1) return '';
+  const start = idx + keyWithEqQuote.length;
+  const end = line.indexOf('"', start);
+  return end > start ? line.slice(start, end).trim() : '';
 }
 
 function cleanChannelTitle(rawTitle: string): { name: string; resolution?: string } {
-  const resMatch = rawTitle.match(/\((\d{3,4}p)\)/i);
-  const resolution = resMatch ? resMatch[1].toLowerCase() : undefined;
+  let resolution: string | undefined;
+  const pIdx = rawTitle.indexOf('p)');
+  if (pIdx > 2) {
+    const resMatch = rawTitle.match(/\((\d{3,4}p)\)/i);
+    if (resMatch) resolution = resMatch[1].toLowerCase();
+  }
   const cleaned = rawTitle
     .replace(/\(\d{3,4}p\)/gi, '')
     .replace(/\[[^\]]*\]/g, '')
@@ -374,37 +395,35 @@ function cleanChannelTitle(rawTitle: string): { name: string; resolution?: strin
 }
 
 function isStrictHttpsHlsUrl(rawUrl: string): boolean {
-  if (!rawUrl || !rawUrl.startsWith('https://')) return false;
-  try {
-    const parsed = new URL(rawUrl);
-    if (parsed.protocol !== 'https:') return false;
-    const lowerPath = `${parsed.pathname}${parsed.search}`.toLowerCase();
-    return lowerPath.includes('.m3u8');
-  } catch {
-    return false;
-  }
+  if (rawUrl.length < 16 || !rawUrl.startsWith('https://')) return false;
+  const lower = rawUrl.toLowerCase();
+  if (!lower.includes('.m3u8')) return false;
+  if (lower.includes(' ')) return false;
+  return true;
 }
 
 function isSafeHttpsImage(rawUrl: string): string | undefined {
   if (!rawUrl || !rawUrl.startsWith('https://')) return undefined;
-  try {
-    const parsed = new URL(rawUrl);
-    return parsed.protocol === 'https:' ? rawUrl : undefined;
-  } catch {
-    return undefined;
-  }
+  return rawUrl;
 }
 
 function isLatinFriendlyName(name: string): boolean {
-  const latinChars = (name.match(/[A-Za-z0-9]/g) || []).length;
-  return latinChars >= Math.max(2, Math.floor(name.length * 0.45));
+  let latin = 0;
+  for (let i = 0; i < name.length; i++) {
+    const c = name.charCodeAt(i);
+    if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57)) {
+      latin++;
+    }
+  }
+  return latin >= Math.max(2, Math.floor(name.length * 0.45));
 }
 
 function computeQualityScore(
   name: string,
   url: string,
   resolution?: string,
-  logo?: string
+  logo?: string,
+  sourceId?: MasterPlaylistSource['id']
 ): number {
   let score = 0;
   if (isLatinFriendlyName(name)) score += 25;
@@ -420,20 +439,57 @@ function computeQualityScore(
     lowerUrl.includes('akamaized.net') ||
     lowerUrl.includes('amagi.tv') ||
     lowerUrl.includes('fastly.net') ||
-    lowerUrl.includes('wurl.com')
+    lowerUrl.includes('wurl.com') ||
+    lowerUrl.includes('tubi.io')
   ) {
     score += 12;
   }
-  // Deprioritize redirect proxies that frequently fail browser CORS while still keeping them discoverable
+  if (sourceId === 'tubi') score += 8;
+  if (sourceId === 'free-tv') score += 4;
   if (lowerUrl.includes('jmp2.uk')) {
-    score -= 18;
+    score -= 16;
   }
   return score;
 }
 
-function parseM3uPlaylist(
+function resolveCategoriesFromGroupAndTitle(
+  groupTitle: string,
+  name: string,
+  tvgId: string,
+  sourceId: MasterPlaylistSource['id']
+): EntertainmentCategory[] {
+  const matched: EntertainmentCategory[] = [];
+
+  // 1. Direct group-title mapping for iptv-org category master playlist
+  if (sourceId === 'iptv-org' && groupTitle) {
+    const parts = groupTitle.split(';');
+    for (const part of parts) {
+      const mapped = GROUP_TITLE_TO_CATEGORY[part.trim().toLowerCase()];
+      if (mapped && !matched.includes(mapped)) {
+        matched.push(mapped);
+      }
+    }
+  }
+
+  // 2. Smart genre keyword inference (always run for Free-TV, Pluto, Tubi, or generic/untagged iptv-org entries)
+  if (
+    matched.length === 0 ||
+    (matched.length === 1 && matched[0] === 'entertainment')
+  ) {
+    const haystack = `${name} ${tvgId}`;
+    for (const rule of CATEGORY_INFERENCE_RULES) {
+      if (rule.pattern.test(haystack) && !matched.includes(rule.category)) {
+        matched.push(rule.category);
+      }
+    }
+  }
+
+  return matched.length > 0 ? matched : ['entertainment'];
+}
+
+function parseMasterPlaylist(
   rawText: string,
-  source: PlaylistSource
+  source: MasterPlaylistSource
 ): EntertainmentChannel[] {
   const lines = rawText.split(/\r?\n/);
   const parsed: EntertainmentChannel[] = [];
@@ -464,93 +520,35 @@ function parseM3uPlaylist(
 
     const commaIndex = line.lastIndexOf(',');
     const rawTitle = commaIndex >= 0 ? line.slice(commaIndex + 1).trim() : '';
-    if (!rawTitle || BLOCKED_TAGS_REGEX.test(rawTitle)) continue;
-
-    const logo = isSafeHttpsImage(extractAttr(line, 'tvg-logo'));
-    const { name, resolution } = cleanChannelTitle(rawTitle);
-    if (!name || name.length < 2) continue;
-
-    const qualityScore = computeQualityScore(name, urlLine, resolution, logo);
-
-    parsed.push({
-      id: `iptv-${source.category}-${parsed.length}-${name
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .slice(0, 24)}`,
-      name,
-      url: urlLine,
-      category: source.category,
-      categories: [source.category],
-      logo,
-      resolution,
-      sourceLabel: `IPTV-Org · ${source.label}`,
-      featured: false,
-      qualityScore,
-    });
-  }
-
-  return parsed;
-}
-
-function parseFreeTvPlaylist(rawText: string): EntertainmentChannel[] {
-  const lines = rawText.split(/\r?\n/);
-  const parsed: EntertainmentChannel[] = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line.startsWith('#EXTINF:')) continue;
-
-    let urlLine = '';
-    let j = i + 1;
-    while (j < lines.length) {
-      const candidate = lines[j].trim();
-      if (!candidate) {
-        j++;
-        continue;
-      }
-      if (candidate.startsWith('#EXTINF:')) {
-        break;
-      }
-      if (!candidate.startsWith('#')) {
-        urlLine = candidate;
-        break;
-      }
-      j++;
-    }
-
-    if (!isStrictHttpsHlsUrl(urlLine)) continue;
-
-    const commaIndex = line.lastIndexOf(',');
-    const rawTitle = commaIndex >= 0 ? line.slice(commaIndex + 1).trim() : '';
-    const tvgName = extractAttr(line, 'tvg-name');
+    const tvgName = rawTitle ? '' : extractAttrFast(line, 'tvg-name="');
     const titleSource = rawTitle || tvgName;
     if (!titleSource || BLOCKED_TAGS_REGEX.test(titleSource)) continue;
 
-    const tvgId = extractAttr(line, 'tvg-id');
-    const logo = isSafeHttpsImage(extractAttr(line, 'tvg-logo'));
+    const groupTitle = extractAttrFast(line, 'group-title="');
+    const tvgId = extractAttrFast(line, 'tvg-id="');
+    const logo = isSafeHttpsImage(extractAttrFast(line, 'tvg-logo="'));
     const isGeoMarked = FREE_TV_GEO_MARKER_REGEX.test(titleSource);
     const { name, resolution } = cleanChannelTitle(titleSource);
     if (!name || name.length < 2) continue;
 
-    const categories = inferFreeTvCategories(name, tvgId);
+    const categories = resolveCategoriesFromGroupAndTitle(groupTitle, name, tvgId, source.id);
     const primaryCategory = categories[0];
-    const baseScore = computeQualityScore(name, urlLine, resolution, logo);
-    const qualityScore = isGeoMarked ? baseScore - 15 : baseScore + 4;
+    const baseScore = computeQualityScore(name, urlLine, resolution, logo, source.id);
+    const qualityScore = isGeoMarked ? baseScore - 15 : baseScore;
+    const sourceLabel = `${source.label} · ${CATEGORY_LABELS[primaryCategory]}`;
 
     parsed.push({
-      id: `freetv-${primaryCategory}-${parsed.length}-${name
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .slice(0, 24)}`,
+      id: `${source.id}-${primaryCategory}-${parsed.length}`,
       name,
       url: urlLine,
       category: primaryCategory,
       categories,
       logo,
       resolution,
-      sourceLabel: 'Free-TV IPTV',
+      sourceLabel,
       featured: false,
       qualityScore,
+      searchText: buildSearchText(name, categories, source.label, resolution),
     });
   }
 
@@ -598,7 +596,7 @@ export function clearCachedChannelHealth(channelId?: string): void {
  */
 export async function probeHlsStream(
   url: string,
-  timeoutMs = 3000,
+  timeoutMs = 2800,
   externalSignal?: AbortSignal
 ): Promise<ChannelHealth> {
   if (externalSignal?.aborted) return 'offline';
@@ -621,7 +619,6 @@ export async function probeHlsStream(
       return 'offline';
     }
 
-    // Read only the first chunk to confirm valid HLS (#EXTM3U) without downloading large bodies
     if (response.body && typeof response.body.getReader === 'function') {
       const reader = response.body.getReader();
       try {
@@ -646,6 +643,10 @@ export async function probeHlsStream(
   }
 }
 
+function yieldToMainThread(): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, 0));
+}
+
 export async function loadEntertainmentChannels(
   forceRefresh = false
 ): Promise<EntertainmentPlaylistResult> {
@@ -667,54 +668,33 @@ export async function loadEntertainmentChannels(
       merged.push(copy);
     }
 
-    // 2. Fetch all 12 public iptv-org category playlists in two smooth waves of 6
+    // 2. Fetch all 4 master GitHub playlists in parallel (10,000+ unique HTTPS .m3u8 channels)
     let loadedPlaylists = 0;
-    const fetchOne = async (source: PlaylistSource): Promise<EntertainmentChannel[]> => {
-      try {
-        const controller = new AbortController();
-        const timer = window.setTimeout(() => controller.abort(), 10000);
-        const response = await fetch(source.url, {
-          signal: controller.signal,
-          mode: 'cors',
-        });
-        window.clearTimeout(timer);
-        if (!response.ok) return [];
-        const text = await response.text();
-        loadedPlaylists += 1;
-        return parseM3uPlaylist(text, source);
-      } catch {
-        return [];
-      }
-    };
+    const rawPayloads = await Promise.all(
+      MASTER_PLAYLIST_SOURCES.map(async (source) => {
+        try {
+          const controller = new AbortController();
+          const timer = window.setTimeout(() => controller.abort(), source.timeoutMs);
+          const response = await fetch(source.url, {
+            signal: controller.signal,
+            mode: 'cors',
+          });
+          window.clearTimeout(timer);
+          if (!response.ok) return { source, text: '' };
+          const text = await response.text();
+          loadedPlaylists += 1;
+          return { source, text };
+        } catch {
+          return { source, text: '' };
+        }
+      })
+    );
 
-    const fetchFreeTv = async (): Promise<EntertainmentChannel[]> => {
-      try {
-        const controller = new AbortController();
-        const timer = window.setTimeout(() => controller.abort(), 12000);
-        const response = await fetch(FREE_TV_PLAYLIST_URL, {
-          signal: controller.signal,
-          mode: 'cors',
-        });
-        window.clearTimeout(timer);
-        if (!response.ok) return [];
-        const text = await response.text();
-        loadedPlaylists += 1;
-        return parseFreeTvPlaylist(text);
-      } catch {
-        return [];
-      }
-    };
-
-    const wave1 = await Promise.all(PLAYLIST_SOURCES.slice(0, 6).map(fetchOne));
-    const [freeTvBatch, ...wave2] = await Promise.all([
-      fetchFreeTv(),
-      ...PLAYLIST_SOURCES.slice(6).map(fetchOne),
-    ]);
-    const allBatches = [...wave1, ...wave2, freeTvBatch];
-
-    // 3. Deduplicate strictly by HTTPS stream URL while preserving multi-category membership
+    // 3. Parse each playlist with main-thread yields so video playback & scrolling stay 60fps
     const parsedPool: EntertainmentChannel[] = [];
-    for (const batch of allBatches) {
+    for (const { source, text } of rawPayloads) {
+      if (!text) continue;
+      const batch = parseMasterPlaylist(text, source);
       for (const ch of batch) {
         const existing = byUrl.get(ch.url);
         if (existing) {
@@ -731,9 +711,10 @@ export async function loadEntertainmentChannels(
         byUrl.set(ch.url, ch);
         parsedPool.push(ch);
       }
+      await yieldToMainThread();
     }
 
-    // Sort parsed pool cleanly by quality score then alphabetical name (NO cap so total easily exceeds 1,000+)
+    // 4. Sort parsed pool cleanly by quality score then alphabetical name
     parsedPool.sort((a, b) => {
       const diff = b.qualityScore - a.qualityScore;
       if (diff !== 0) return diff;
@@ -745,7 +726,7 @@ export async function loadEntertainmentChannels(
     const result: EntertainmentPlaylistResult = {
       channels: merged,
       loadedPlaylists,
-      totalPlaylists: PLAYLIST_SOURCES.length + 1,
+      totalPlaylists: MASTER_PLAYLIST_SOURCES.length,
       usedFallbackOnly: loadedPlaylists === 0,
       fetchedAt: Date.now(),
     };

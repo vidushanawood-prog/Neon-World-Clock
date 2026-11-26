@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import {
   AlertTriangle,
@@ -46,7 +46,7 @@ import {
 
 type StreamStatus = 'connecting' | 'playing' | 'buffering' | 'paused' | 'error';
 
-const PAGE_BATCH_SIZE = 80;
+const PAGE_BATCH_SIZE = 60;
 const PROBE_CONCURRENCY = 5;
 const PROBE_TIMEOUT_MS = 2800;
 const PROBE_BATCH_PAUSE_MS = 150;
@@ -87,16 +87,18 @@ function CategoryIcon({
   }
 }
 
-export const EntertainmentLivePage: React.FC = () => {
+export const EntertainmentLivePage: React.FC = React.memo(() => {
   const [channels, setChannels] = useState<EntertainmentChannel[]>(() => [
     ...VERIFIED_SPOTLIGHT_CHANNELS,
   ]);
   const [isLoadingPlaylist, setIsLoadingPlaylist] = useState<boolean>(true);
   const [loadedPlaylistsCount, setLoadedPlaylistsCount] = useState<number>(0);
-  const [totalPlaylistsCount, setTotalPlaylistsCount] = useState<number>(13);
+  const [totalPlaylistsCount, setTotalPlaylistsCount] = useState<number>(4);
   const [activeCategory, setActiveCategory] = useState<CategoryFilter>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const deferredSearchQuery = useDeferredValue(searchQuery);
   const [hideOffline, setHideOffline] = useState<boolean>(false);
+  const [liveOnly, setLiveOnly] = useState<boolean>(false);
   const [autoSkipEnabled, setAutoSkipEnabled] = useState<boolean>(true);
   const [visibleLimit, setVisibleLimit] = useState<number>(PAGE_BATCH_SIZE);
 
@@ -174,7 +176,7 @@ export const EntertainmentLivePage: React.FC = () => {
   // Reset pagination window whenever category or search filter changes
   useEffect(() => {
     setVisibleLimit(PAGE_BATCH_SIZE);
-  }, [activeCategory, searchQuery, hideOffline]);
+  }, [activeCategory, deferredSearchQuery, hideOffline, liveOnly]);
 
   // Non-blocking, batched background stream health checker:
   // Prioritizes active category first, then round-robins across all 12 categories so EVERY tab gets verified Live channels at the top.
@@ -318,13 +320,21 @@ export const EntertainmentLivePage: React.FC = () => {
     };
   }, [channels, activeCategory, probeTrigger]);
 
+  const channelById = useMemo(() => {
+    const map = new Map<string, EntertainmentChannel>();
+    for (let i = 0; i < channels.length; i++) {
+      map.set(channels[i].id, channels[i]);
+    }
+    return map;
+  }, [channels]);
+
   const selectedChannel = useMemo(
-    () => channels.find((c) => c.id === selectedChannelId) || channels[0] || null,
-    [channels, selectedChannelId]
+    () => channelById.get(selectedChannelId) || channels[0] || null,
+    [channelById, channels, selectedChannelId]
   );
 
-  // Category counts & verified-live counts per tab
-  const { categoryCounts, categoryLiveCounts } = useMemo(() => {
+  // Static category totals (only recomputed when full channel catalog loads)
+  const categoryCounts = useMemo(() => {
     const counts: Record<CategoryFilter, number> = {
       all: channels.length,
       animation: 0,
@@ -340,6 +350,18 @@ export const EntertainmentLivePage: React.FC = () => {
       kids: 0,
       series: 0,
     };
+
+    for (let i = 0; i < channels.length; i++) {
+      const cats = channels[i].categories;
+      for (let j = 0; j < cats.length; j++) {
+        counts[cats[j]] += 1;
+      }
+    }
+    return counts;
+  }, [channels]);
+
+  // Verified-live counts per tab (O(probed) lookup via Map instead of scanning 10,000+ channels on every probe batch)
+  const categoryLiveCounts = useMemo(() => {
     const liveCounts: Record<CategoryFilter, number> = {
       all: 0,
       animation: 0,
@@ -356,48 +378,46 @@ export const EntertainmentLivePage: React.FC = () => {
       series: 0,
     };
 
-    for (const ch of channels) {
-      const isLive = channelHealth[ch.id] === 'working';
-      if (isLive) liveCounts.all += 1;
-      for (const cat of ch.categories) {
-        counts[cat] += 1;
-        if (isLive) liveCounts[cat] += 1;
+    for (const [id, healthState] of Object.entries(channelHealth)) {
+      if (healthState !== 'working') continue;
+      const ch = channelById.get(id);
+      if (!ch) continue;
+      liveCounts.all += 1;
+      const cats = ch.categories;
+      for (let j = 0; j < cats.length; j++) {
+        liveCounts[cats[j]] += 1;
       }
     }
-    return { categoryCounts: counts, categoryLiveCounts: liveCounts };
-  }, [channels, channelHealth]);
+    return liveCounts;
+  }, [channelById, channelHealth]);
 
   // Filtered & auto-sorted channel directory (never grouped by country):
-  // Rank 0 = Verified Working ("Live") at the very top, Rank 1 = Untested, Rank 2 = Offline at the bottom
+  // O(N) 3-bucket partition preserves base featured/quality/name order while putting Verified "Live" at top & Offline below
   const sortedFilteredChannels = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
+    const q = deferredSearchQuery.trim().toLowerCase();
+    const working: EntertainmentChannel[] = [];
+    const untested: EntertainmentChannel[] = [];
+    const offline: EntertainmentChannel[] = [];
 
-    const filtered = channels.filter((ch) => {
-      if (activeCategory !== 'all' && !ch.categories.includes(activeCategory)) return false;
-      if (hideOffline && channelHealth[ch.id] === 'offline') return false;
-      if (q) {
-        const catText = ch.categories.map((c) => CATEGORY_LABELS[c]).join(' ');
-        const hay = `${ch.name} ${catText} ${ch.resolution || ''}`.toLowerCase();
-        if (!hay.includes(q)) return false;
+    for (let i = 0; i < channels.length; i++) {
+      const ch = channels[i];
+      if (activeCategory !== 'all' && !ch.categories.includes(activeCategory)) continue;
+      const health = channelHealth[ch.id];
+      if (liveOnly && health !== 'working') continue;
+      if (hideOffline && health === 'offline') continue;
+      if (q && !ch.searchText.includes(q)) continue;
+
+      if (health === 'working') {
+        working.push(ch);
+      } else if (health === 'offline') {
+        offline.push(ch);
+      } else {
+        untested.push(ch);
       }
-      return true;
-    });
+    }
 
-    const rankOf = (ch: EntertainmentChannel): number => {
-      const h = channelHealth[ch.id];
-      if (h === 'working') return 0;
-      if (h === 'offline') return 2;
-      return 1;
-    };
-
-    return filtered.sort((a, b) => {
-      const rankDiff = rankOf(a) - rankOf(b);
-      if (rankDiff !== 0) return rankDiff;
-      if (a.featured !== b.featured) return a.featured ? -1 : 1;
-      if (b.qualityScore !== a.qualityScore) return b.qualityScore - a.qualityScore;
-      return a.name.localeCompare(b.name);
-    });
-  }, [channels, activeCategory, hideOffline, channelHealth, searchQuery]);
+    return working.concat(untested, offline);
+  }, [channels, activeCategory, hideOffline, liveOnly, channelHealth, deferredSearchQuery]);
 
   const renderedChannels = useMemo(
     () => sortedFilteredChannels.slice(0, visibleLimit),
@@ -1107,7 +1127,7 @@ export const EntertainmentLivePage: React.FC = () => {
                 <span>{selectedChannel.sourceLabel}</span>
               </>
             ) : (
-              <span>Loading 12 public HTTPS HLS category playlists…</span>
+              <span>Loading 10,000+ public HTTPS HLS channels…</span>
             )}
           </p>
         </div>
@@ -1443,7 +1463,7 @@ export const EntertainmentLivePage: React.FC = () => {
               </span>
               <span className="tabular-nums text-slate-400">
                 {loadedPlaylistsCount > 0
-                  ? `${loadedPlaylistsCount}/${totalPlaylistsCount} playlists merged (iptv-org + Free-TV)`
+                  ? `${loadedPlaylistsCount}/${totalPlaylistsCount} master playlists merged (IPTV-Org + Free-TV + Pluto + Tubi)`
                   : 'Verified HTTPS HLS spotlight active'}
               </span>
               <span aria-hidden="true" className="text-slate-600">
@@ -1554,7 +1574,7 @@ export const EntertainmentLivePage: React.FC = () => {
                 type="search"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search 1,000+ channels (movies, anime, sports, news...)"
+                placeholder="Search 10,000+ channels (movies, cartoons, anime, sports, news...)"
                 aria-label="Search live channels"
                 className="h-10 w-full rounded-xl border border-white/12 bg-slate-950/90 pr-9 pl-10 text-xs text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-400/20"
               />
@@ -1570,14 +1590,27 @@ export const EntertainmentLivePage: React.FC = () => {
               )}
             </div>
 
-            {/* Offline Filter & Re-Scan Controls */}
-            <div className="flex items-center justify-between gap-2 text-[11px] text-slate-400">
+            {/* Live-Only, Offline Filter & Re-Scan Controls */}
+            <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-400">
               <span className="tabular-nums">
                 {categoryLiveCounts[activeCategory]} Live verified
                 {offlineCount > 0 ? ` · ${offlineCount} offline` : ''}
               </span>
               <div className="flex items-center gap-3">
-                {offlineCount > 0 && (
+                {workingCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setLiveOnly((v) => !v)}
+                    className={`font-semibold transition-colors ${
+                      liveOnly
+                        ? 'text-emerald-300 underline decoration-emerald-400/60 underline-offset-2'
+                        : 'text-emerald-400/90 hover:text-emerald-300'
+                    }`}
+                  >
+                    {liveOnly ? 'All streams' : 'Live only'}
+                  </button>
+                )}
+                {offlineCount > 0 && !liveOnly && (
                   <button
                     type="button"
                     onClick={() => setHideOffline((v) => !v)}
@@ -1603,7 +1636,7 @@ export const EntertainmentLivePage: React.FC = () => {
           <div className="flex-1 divide-y divide-white/[0.05] overflow-y-auto">
             {isLoadingPlaylist && channels.length <= VERIFIED_SPOTLIGHT_CHANNELS.length && (
               <div className="flex items-center justify-between gap-2 bg-sky-500/10 px-4 py-2.5 text-xs text-sky-200">
-                <span>Loading 1,000+ channels across {totalPlaylistsCount} playlists…</span>
+                <span>Loading 10,000+ channels across {totalPlaylistsCount} master playlists…</span>
                 <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
               </div>
             )}
@@ -1621,6 +1654,7 @@ export const EntertainmentLivePage: React.FC = () => {
                     setSearchQuery('');
                     setActiveCategory('all');
                     setHideOffline(false);
+                    setLiveOnly(false);
                   }}
                   className="mt-4 rounded-xl bg-sky-500 px-3.5 py-2 text-xs font-bold text-slate-950 hover:bg-sky-400"
                 >
@@ -1639,7 +1673,7 @@ export const EntertainmentLivePage: React.FC = () => {
                       key={ch.id}
                       type="button"
                       onClick={() => selectChannel(ch, true)}
-                      className={`flex w-full items-center gap-3 px-4 py-3 text-left transition-colors ${
+                      className={`flex w-full items-center gap-3 px-4 py-3 text-left transition-colors [content-visibility:auto] [contain-intrinsic-size:64px] ${
                         isSelected
                           ? 'bg-sky-500/18 text-white'
                           : health === 'offline'
@@ -1749,4 +1783,6 @@ export const EntertainmentLivePage: React.FC = () => {
       </div>
     </div>
   );
-};
+});
+
+EntertainmentLivePage.displayName = 'EntertainmentLivePage';

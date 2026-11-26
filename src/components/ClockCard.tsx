@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Check, Compass, Copy, Moon, Star, Sun, Sunrise, Sunset } from 'lucide-react';
 import type { Country } from '../data/countries';
 import { formatClockForZone } from '../utils/time';
@@ -51,6 +51,8 @@ export const ClockCard: React.FC<ClockCardProps> = React.memo(
   }) => {
     const [flagError, setFlagError] = useState(false);
 
+    const minuteKey = Math.floor(displayDate.getTime() / 60000);
+
     const clock = formatClockForZone(
       displayDate,
       country.timezone,
@@ -58,17 +60,25 @@ export const ClockCard: React.FC<ClockCardProps> = React.memo(
       referenceDateKey
     );
 
-    const seasonInfo = getSeasonInfo(country.lat, displayDate, country.timezone);
-    const daylight = getDaylightInfo(
-      country.lat,
-      country.lng,
-      displayDate,
-      country.timezone,
-      clock.offsetMinutes,
-      is24Hour
-    );
+    const { seasonInfo, daylight } = useMemo(() => {
+      const sampleDate = new Date(minuteKey * 60000);
+      return {
+        seasonInfo: getSeasonInfo(country.lat, sampleDate, country.timezone),
+        daylight: getDaylightInfo(
+          country.lat,
+          country.lng,
+          sampleDate,
+          country.timezone,
+          clock.offsetMinutes,
+          is24Hour
+        ),
+      };
+    }, [country.lat, country.lng, country.timezone, minuteKey, clock.offsetMinutes, is24Hour]);
 
-    const lkrRateLabel = formatLkrRateShort(country.currency, rates);
+    const lkrRateLabel = useMemo(
+      () => formatLkrRateShort(country.currency, rates),
+      [country.currency, rates]
+    );
 
     const handleCopy = (e: React.MouseEvent) => {
       e.stopPropagation();
@@ -120,21 +130,21 @@ export const ClockCard: React.FC<ClockCardProps> = React.memo(
         tabIndex={0}
         role="button"
         aria-label={`Inspect ${country.name} (${country.capital}) details`}
-        className={`group relative cursor-pointer overflow-hidden rounded-2xl border p-5 text-left transition-all duration-200 ease-out hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
+        className={`group relative cursor-pointer overflow-hidden rounded-2xl border p-5 text-left transition-transform duration-200 ease-out hover:-translate-y-0.5 [content-visibility:auto] [contain-intrinsic-size:236px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
           isFocusedOnGlobe
-            ? 'bg-white/95 border-sky-400/80 shadow-[0_6px_24px_-6px_rgba(2,132,199,0.2)] dark:bg-slate-900/80 dark:border-sky-400/50 dark:shadow-[0_10px_32px_-12px_rgba(56,189,248,0.26)]'
+            ? 'bg-white/95 border-sky-400/80 shadow-[0_6px_24px_-6px_rgba(2,132,199,0.2)] dark:bg-[#0d172d]/95 dark:border-sky-400/55 dark:shadow-[0_10px_28px_-12px_rgba(56,189,248,0.26)]'
             : isPinned
-              ? 'bg-white/90 border-sky-200/90 shadow-[0_4px_20px_-6px_rgba(2,132,199,0.12)] dark:bg-slate-900/70 dark:border-sky-400/25 dark:shadow-[0_8px_30px_-12px_rgba(56,189,248,0.16)]'
-              : 'bg-white/80 border-slate-200/80 shadow-[0_2px_12px_-4px_rgba(15,23,42,0.06)] hover:border-slate-300/90 dark:bg-slate-900/55 dark:border-white/[0.08] dark:shadow-none dark:hover:border-white/[0.16]'
-        } backdrop-blur-xl`}
+              ? 'bg-white/95 border-sky-200/90 shadow-[0_4px_18px_-6px_rgba(2,132,199,0.12)] dark:bg-[#0b1428]/92 dark:border-sky-400/28'
+              : 'bg-white/92 border-slate-200/80 shadow-[0_2px_10px_-4px_rgba(15,23,42,0.06)] hover:border-slate-300/90 dark:bg-[#091122]/88 dark:border-white/[0.08] dark:shadow-none dark:hover:border-white/[0.16]'
+        }`}
       >
-        {/* Subtle Day / Night atmospheric corner wash */}
+        {/* Lightweight Day / Night corner tint (zero GPU blur layer cost) */}
         <div
           aria-hidden="true"
-          className={`pointer-events-none absolute -top-12 -right-12 h-36 w-36 rounded-full blur-2xl transition-opacity duration-300 ${
+          className={`pointer-events-none absolute inset-0 opacity-65 transition-opacity duration-200 group-hover:opacity-100 ${
             clock.isDaytime
-              ? 'bg-amber-400/15 opacity-70 group-hover:opacity-100 dark:bg-amber-400/14'
-              : 'bg-indigo-500/12 opacity-65 group-hover:opacity-100 dark:bg-indigo-400/16'
+              ? 'bg-[radial-gradient(circle_at_95%_5%,rgba(251,191,36,0.12),transparent_48%)]'
+              : 'bg-[radial-gradient(circle_at_95%_5%,rgba(99,102,241,0.14),transparent_48%)]'
           }`}
         />
 
