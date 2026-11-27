@@ -13,6 +13,8 @@ export type AppRoute =
   | { page: 'live-tv'; code?: string }
   | { page: 'live-radio'; code?: string }
   | { page: 'entertainment-live' }
+  | { page: 'movies' }
+  | { page: 'movie-detail'; id: number }
   | { page: 'account' };
 
 export function parseHashRoute(rawHash: string): AppRoute {
@@ -62,6 +64,15 @@ export function parseHashRoute(rawHash: string): AppRoute {
       return { page: 'live-radio', code: param || undefined };
     case 'entertainment-live':
       return { page: 'entertainment-live' };
+    case 'movies': {
+      if (param && /^\d{1,12}$/.test(param)) {
+        const parsedId = Number.parseInt(param, 10);
+        if (Number.isSafeInteger(parsedId) && parsedId > 0) {
+          return { page: 'movie-detail', id: parsedId };
+        }
+      }
+      return { page: 'movies' };
+    }
     case 'account':
       return { page: 'account' };
     default:
@@ -105,6 +116,10 @@ export function routeToHash(route: AppRoute): string {
         : '#/live-radio';
     case 'entertainment-live':
       return '#/entertainment-live';
+    case 'movies':
+      return '#/movies';
+    case 'movie-detail':
+      return `#/movies/${route.id}`;
     case 'account':
       return '#/account';
   }

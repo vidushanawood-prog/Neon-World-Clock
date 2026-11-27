@@ -9,6 +9,7 @@ import {
   Clapperboard,
   Clock,
   Coins,
+  Film,
   Globe2,
   LayoutDashboard,
   LogOut,
@@ -94,8 +95,12 @@ import { ToolsPage } from './pages/ToolsPage';
 import { LiveTvPage } from './pages/LiveTvPage';
 import { LiveRadioPage } from './pages/LiveRadioPage';
 import { EntertainmentLivePage } from './pages/EntertainmentLivePage';
+import { MoviesPage } from './pages/MoviesPage';
+import { MovieDetailPage } from './pages/MovieDetailPage';
 import { AccountPage } from './pages/AccountPage';
 import { getLiveTvChannelForCountry } from './data/liveTvChannels';
+import { useMovieWatchlist } from './services/movieWatchlist';
+import type { TmdbMovie } from './services/tmdb';
 
 type EntryStage = 'landing' | 'auth' | 'booting' | 'dashboard';
 
@@ -630,7 +635,9 @@ export default function App() {
     if (
       route.page === 'live-tv' ||
       route.page === 'live-radio' ||
-      route.page === 'entertainment-live'
+      route.page === 'entertainment-live' ||
+      route.page === 'movies' ||
+      route.page === 'movie-detail'
     ) {
       if (
         (route.page === 'live-tv' || route.page === 'live-radio') &&
@@ -639,7 +646,7 @@ export default function App() {
       ) {
         setFocusedIso(route.code.toLowerCase());
       }
-      // Strictly stop any National Anthem & keep Voice Assistant completely silent during Live TV / Live Radio / Entertainment Live
+      // Strictly stop any National Anthem & keep Voice Assistant completely silent during Live TV / Live Radio / Entertainment Live / Movies
       anthemController.stopAnthem();
       return;
     }
@@ -863,6 +870,43 @@ export default function App() {
     },
     [navigate]
   );
+
+  // Synced My List / Watchlist (Firestore when signed in + verified, localStorage fallback)
+  const {
+    watchlist: movieWatchlist,
+    watchlistIds: movieWatchlistIds,
+    isCloudSynced: isMovieWatchlistCloudSynced,
+    toggleWatchlist: toggleRawMovieWatchlist,
+  } = useMovieWatchlist(firebaseUser);
+
+  const handleToggleMovieWatchlist = useCallback(
+    async (movie: TmdbMovie) => {
+      const action = await toggleRawMovieWatchlist(movie);
+      showToast(
+        action === 'added' ? 'Added to My List' : 'Removed from My List',
+        movie.title
+      );
+      return action;
+    },
+    [toggleRawMovieWatchlist, showToast]
+  );
+
+  const handleOpenMovieDetail = useCallback(
+    (movieId: number) => {
+      anthemController.stopAnthem();
+      navigate({ page: 'movie-detail', id: movieId });
+    },
+    [anthemController, navigate]
+  );
+
+  const handleBackToMovies = useCallback(() => {
+    anthemController.stopAnthem();
+    navigate({ page: 'movies' });
+  }, [anthemController, navigate]);
+
+  const handleOpenAccountFromMovies = useCallback(() => {
+    navigate({ page: 'account' });
+  }, [navigate]);
 
   const tabCounts = useMemo(() => {
     const counts: Record<FilterTab, number> = {
@@ -1137,26 +1181,6 @@ export default function App() {
           <div className="flex shrink-0 items-center gap-2">
             <button
               type="button"
-              onClick={() => {
-                anthemController.stopAnthem();
-                navigate({ page: 'entertainment-live' });
-              }}
-              aria-current={route.page === 'entertainment-live' ? 'page' : undefined}
-              className={`hidden h-10 items-center gap-1.5 rounded-xl border px-3 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 md:inline-flex ${
-                route.page === 'entertainment-live'
-                  ? 'border-fuchsia-400/55 bg-fuchsia-500/20 text-fuchsia-950 dark:text-white'
-                  : 'border-slate-200/90 bg-white/90 text-slate-700 hover:border-fuchsia-400/45 hover:text-slate-950 dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-200 dark:hover:border-fuchsia-400/45 dark:hover:bg-white/[0.12] dark:hover:text-white'
-              }`}
-            >
-              <Clapperboard
-                className="h-4 w-4 text-fuchsia-600 dark:text-fuchsia-400"
-                aria-hidden="true"
-              />
-              <span>Entertainment Live</span>
-            </button>
-
-            <button
-              type="button"
               onClick={() => navigate({ page: 'home' })}
               aria-label="Return to Home Globe & Clocks"
               className="hidden h-10 items-center gap-1.5 rounded-xl border border-slate-200/90 bg-white/90 px-3 text-xs font-semibold text-slate-700 transition-colors hover:border-sky-300 hover:text-slate-950 sm:inline-flex dark:border-white/12 dark:bg-white/[0.06] dark:text-slate-200 dark:hover:bg-white/[0.12] dark:hover:text-white"
@@ -1280,6 +1304,38 @@ export default function App() {
         'Entertainment Live',
         '10,000+ live HLS channels across Movies, Cartoons, Sports, News, Music & more',
         <EntertainmentLivePage />
+      );
+    }
+
+    // 1E. Dedicated Full-Screen Movies Page (#/movies)
+    if (route.page === 'movies') {
+      return renderDedicatedSubPage(
+        'Movies',
+        'Trending worldwide, live TMDB search, genre filters, streaming & My List',
+        <MoviesPage
+          watchlist={movieWatchlist}
+          watchlistIds={movieWatchlistIds}
+          isCloudSynced={isMovieWatchlistCloudSynced}
+          onToggleWatchlist={handleToggleMovieWatchlist}
+          onOpenMovie={handleOpenMovieDetail}
+          onOpenAccount={handleOpenAccountFromMovies}
+        />
+      );
+    }
+
+    // 1F. Dedicated Full-Screen Movie Details & Watch Page (#/movies/:id)
+    if (route.page === 'movie-detail') {
+      return renderDedicatedSubPage(
+        'Watch Movie',
+        'Multi-server HD stream player, official trailer, cast & similar titles',
+        <MovieDetailPage
+          movieId={route.id}
+          watchlistIds={movieWatchlistIds}
+          isCloudSynced={isMovieWatchlistCloudSynced}
+          onToggleWatchlist={handleToggleMovieWatchlist}
+          onBackToMovies={handleBackToMovies}
+          onOpenMovie={handleOpenMovieDetail}
+        />
       );
     }
 
@@ -1500,26 +1556,8 @@ export default function App() {
               <span className="tabular-clock">{liveLocalClock.utcOffset}</span>
             </div>
 
-            {/* Top-Level Right Actions: Entertainment Live + Search + Menu (☰) */}
+            {/* Top-Level Right Actions: Search + Menu (☰) */}
             <div className="flex shrink-0 items-center gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  anthemController.stopAnthem();
-                  navigate({ page: 'entertainment-live' });
-                }}
-                aria-label="Entertainment Live"
-                title="Watch live entertainment, movies, cartoons & music channels"
-                className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-fuchsia-400/45 bg-fuchsia-500/12 px-2.5 text-xs font-semibold text-fuchsia-900 transition-colors hover:border-fuchsia-400/70 hover:bg-fuchsia-500/20 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fuchsia-400 sm:gap-2 sm:px-3 dark:border-fuchsia-400/35 dark:bg-fuchsia-500/15 dark:text-fuchsia-200 dark:hover:border-fuchsia-400/60 dark:hover:bg-fuchsia-500/25 dark:hover:text-white"
-              >
-                <Clapperboard
-                  className="h-4 w-4 text-fuchsia-600 dark:text-fuchsia-400"
-                  aria-hidden="true"
-                />
-                <span className="sm:hidden">Entertainment</span>
-                <span className="hidden sm:inline">Entertainment Live</span>
-              </button>
-
               <button
                 type="button"
                 onClick={handleQuickSearchFocus}
@@ -2140,6 +2178,27 @@ export default function App() {
 
             <button
               type="button"
+              onClick={() => {
+                anthemController.stopAnthem();
+                handleMenuNavigate({ page: 'movies' });
+              }}
+              className={`flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left text-sm font-semibold transition-colors ${
+                route.page === 'movies' || route.page === 'movie-detail'
+                  ? 'border-sky-400/55 bg-sky-500/20 text-white'
+                  : 'border-white/[0.07] bg-white/[0.03] text-slate-200 hover:border-sky-400/40 hover:bg-white/[0.07]'
+              }`}
+            >
+              <Film className="h-4 w-4 shrink-0 text-sky-400" aria-hidden="true" />
+              <div className="min-w-0">
+                <p>Movies</p>
+                <p className="truncate text-[11px] font-normal text-slate-400">
+                  Trending, live search, multi-server watch &amp; My List
+                </p>
+              </div>
+            </button>
+
+            <button
+              type="button"
               onClick={() => handleMenuNavigate({ page: 'football', code: focusedCountry.iso })}
               className={`flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left text-sm font-semibold transition-colors ${
                 route.page === 'football'
@@ -2484,14 +2543,16 @@ export default function App() {
         </>
       )}
 
-      {/* On-Demand AI Voice Assistant (Speaks only on navigation/click; silent during National Anthem, Live TV, Live Radio & Entertainment Live) */}
+      {/* On-Demand AI Voice Assistant (Speaks only on navigation/click; silent during National Anthem, Live TV, Live Radio, Entertainment Live & Movies) */}
       <ContinuousVoiceNarrator
         interruptSignal={voiceInterrupt}
         isAnthemPlaying={isAnthemPlaying}
         isLiveTvActive={
           route.page === 'live-tv' ||
           route.page === 'live-radio' ||
-          route.page === 'entertainment-live'
+          route.page === 'entertainment-live' ||
+          route.page === 'movies' ||
+          route.page === 'movie-detail'
         }
       />
     </>

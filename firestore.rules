@@ -11,6 +11,10 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidMovieId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 12 && id.matches('^[0-9]+$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -56,6 +60,58 @@ service cloud.firestore {
       );
     }
 
+    // Validation Blueprint for WatchlistMovie (/users/{uid}/watchlist/{movieId})
+    // Mirrors firebase-blueprint.json constraints verbatim
+    function isValidWatchlistMovie(data, uid, movieId) {
+      return (
+        data.keys().hasAll([
+          'uid',
+          'movieId',
+          'title',
+          'posterPath',
+          'backdropPath',
+          'releaseDate',
+          'voteAverage',
+          'overview',
+          'addedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid',
+          'movieId',
+          'title',
+          'posterPath',
+          'backdropPath',
+          'releaseDate',
+          'voteAverage',
+          'overview',
+          'addedAt'
+        ]) &&
+        data.uid is string &&
+        isValidId(data.uid) &&
+        data.uid == request.auth.uid &&
+        data.uid == uid &&
+        data.movieId is int &&
+        data.movieId >= 1 &&
+        data.movieId <= 999999999 &&
+        string(data.movieId) == movieId &&
+        data.title is string &&
+        data.title.size() >= 1 &&
+        data.title.size() <= 200 &&
+        data.posterPath is string &&
+        data.posterPath.size() <= 300 &&
+        data.backdropPath is string &&
+        data.backdropPath.size() <= 300 &&
+        data.releaseDate is string &&
+        data.releaseDate.size() <= 20 &&
+        data.voteAverage is number &&
+        data.voteAverage >= 0 &&
+        data.voteAverage <= 10 &&
+        data.overview is string &&
+        data.overview.size() <= 1200 &&
+        data.addedAt is timestamp
+      );
+    }
+
     // Verified User Profiles (PII strictly isolated to document owner)
     match /users/{uid} {
       // Only the owning authenticated user can read their own profile
@@ -86,6 +142,39 @@ service cloud.firestore {
 
       // Verified owner may delete their own profile document
       allow delete: if isVerifiedUser() && isValidId(uid) && isOwner(uid);
+
+      // Synced Movie Watchlist Subcollection (/users/{uid}/watchlist/{movieId})
+      match /watchlist/{movieId} {
+        // Owner-only single-document read
+        allow get: if isSignedIn() && isValidId(uid) && isValidMovieId(movieId) && isOwner(uid);
+
+        // Owner-only list query enforced via resource.data.uid (zero get()/exists() cost in list)
+        allow list: if isSignedIn() && isOwner(uid) && resource.data.uid == request.auth.uid;
+
+        // Verified owner may add a movie if parent profile exists (Master Gate), schema & timestamp match
+        allow create: if isVerifiedUser() &&
+          isValidId(uid) &&
+          isValidMovieId(movieId) &&
+          isOwner(uid) &&
+          isValidWatchlistMovie(incoming(), uid, movieId) &&
+          incoming().addedAt == request.time &&
+          exists(/databases/$(database)/documents/users/$(uid));
+
+        // Action-Based Update: Verified owner may refresh cached TMDB metadata only; uid, movieId & addedAt immutable
+        allow update: if isVerifiedUser() &&
+          isValidId(uid) &&
+          isValidMovieId(movieId) &&
+          isOwner(uid) &&
+          isValidWatchlistMovie(incoming(), uid, movieId) &&
+          incoming().uid == existing().uid &&
+          incoming().movieId == existing().movieId &&
+          incoming().addedAt == existing().addedAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'posterPath', 'backdropPath', 'releaseDate', 'voteAverage', 'overview']) &&
+          exists(/databases/$(database)/documents/users/$(uid));
+
+        // Verified owner may remove a movie from their own watchlist
+        allow delete: if isVerifiedUser() && isValidId(uid) && isValidMovieId(movieId) && isOwner(uid);
+      }
     }
   }
 }

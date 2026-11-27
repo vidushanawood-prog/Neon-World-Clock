@@ -41,6 +41,74 @@
         }
       },
       "required": ["uid", "email", "displayName", "emailVerified", "createdAt"]
+    },
+    "WatchlistMovie": {
+      "title": "WatchlistMovie",
+      "description": "Movie saved in a verified user's My List / Watchlist subcollection at users/{uid}/watchlist/{movieId}.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Owning Firebase Authentication UID matching parent user document."
+        },
+        "movieId": {
+          "type": "integer",
+          "description": "Positive TMDB movie ID matching the document ID."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Movie title from TMDB."
+        },
+        "posterPath": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 300,
+          "description": "Relative TMDB poster path or empty string."
+        },
+        "backdropPath": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 300,
+          "description": "Relative TMDB backdrop path or empty string."
+        },
+        "releaseDate": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 20,
+          "description": "Movie release date string (YYYY-MM-DD) or empty string."
+        },
+        "voteAverage": {
+          "type": "number",
+          "description": "TMDB average rating between 0 and 10."
+        },
+        "overview": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 1200,
+          "description": "Truncated movie synopsis."
+        },
+        "addedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable Firestore server timestamp recorded when added to My List."
+        }
+      },
+      "required": [
+        "uid",
+        "movieId",
+        "title",
+        "posterPath",
+        "backdropPath",
+        "releaseDate",
+        "voteAverage",
+        "overview",
+        "addedAt"
+      ]
     }
   },
   "firestore": {
@@ -49,6 +117,12 @@
         "$ref": "#/entities/UserProfile"
       },
       "description": "Verified user profile documents isolated strictly to the owning authenticated user."
+    },
+    "/users/{uid}/watchlist/{movieId}": {
+      "schema": {
+        "$ref": "#/entities/WatchlistMovie"
+      },
+      "description": "User's synced My List / Watchlist movies isolated strictly to the owning verified user."
     }
   }
 }
