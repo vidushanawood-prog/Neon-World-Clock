@@ -95,7 +95,7 @@ import { ToolsPage } from './pages/ToolsPage';
 import { LiveTvPage } from './pages/LiveTvPage';
 import { LiveRadioPage } from './pages/LiveRadioPage';
 import { EntertainmentLivePage } from './pages/EntertainmentLivePage';
-import { MoviesPage } from './pages/MoviesPage';
+import { MoviesPage, type MovieNavigationTarget } from './pages/MoviesPage';
 import { MovieDetailPage } from './pages/MovieDetailPage';
 import { AccountPage } from './pages/AccountPage';
 import { getLiveTvChannelForCountry } from './data/liveTvChannels';
@@ -892,9 +892,13 @@ export default function App() {
   );
 
   const handleOpenMovieDetail = useCallback(
-    (movieId: number) => {
+    (target: MovieNavigationTarget) => {
       anthemController.stopAnthem();
-      navigate({ page: 'movie-detail', id: movieId });
+      navigate({
+        page: 'movie-detail',
+        id: target.id,
+        archiveId: target.archiveId,
+      });
     },
     [anthemController, navigate]
   );
@@ -1311,7 +1315,7 @@ export default function App() {
     if (route.page === 'movies') {
       return renderDedicatedSubPage(
         'Movies',
-        'Trending worldwide, live TMDB search, genre filters, streaming & My List',
+        'Ad-free Internet Archive full cinema, TMDB search, genre filters & My List',
         <MoviesPage
           watchlist={movieWatchlist}
           watchlistIds={movieWatchlistIds}
@@ -1323,13 +1327,14 @@ export default function App() {
       );
     }
 
-    // 1F. Dedicated Full-Screen Movie Details & Watch Page (#/movies/:id)
+    // 1F. Dedicated Full-Screen Movie Details & Watch Page (#/movies/:id & #/movies/archive/:archiveId)
     if (route.page === 'movie-detail') {
       return renderDedicatedSubPage(
         'Watch Movie',
-        'Multi-server HD stream player, official trailer, cast & similar titles',
+        'Ad-free native HTML5 / HLS cinema player, captions, official trailer & cast',
         <MovieDetailPage
           movieId={route.id}
+          archiveId={route.archiveId}
           watchlistIds={movieWatchlistIds}
           isCloudSynced={isMovieWatchlistCloudSynced}
           onToggleWatchlist={handleToggleMovieWatchlist}
@@ -2192,7 +2197,7 @@ export default function App() {
               <div className="min-w-0">
                 <p>Movies</p>
                 <p className="truncate text-[11px] font-normal text-slate-400">
-                  Trending, live search, multi-server watch &amp; My List
+                  Ad-free open cinema, TMDB search, native player &amp; My List
                 </p>
               </div>
             </button>

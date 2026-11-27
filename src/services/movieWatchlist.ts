@@ -99,6 +99,13 @@ function buildBlueprintWatchlistPayload(uid: string, movie: TmdbMovie) {
 }
 
 export function watchlistItemToTmdbMovie(item: WatchlistItem): TmdbMovie {
+  const archivePrefix = 'https://archive.org/services/img/';
+  let archiveId: string | undefined;
+  if (item.posterPath && item.posterPath.startsWith(archivePrefix)) {
+    const rawId = decodeURIComponent(item.posterPath.slice(archivePrefix.length)).trim();
+    if (rawId) archiveId = rawId;
+  }
+
   return {
     id: item.movieId,
     title: item.title,
@@ -109,6 +116,8 @@ export function watchlistItemToTmdbMovie(item: WatchlistItem): TmdbMovie {
     vote_average: item.voteAverage,
     vote_count: 0,
     popularity: 0,
+    archiveId,
+    isFreeFullMovie: Boolean(archiveId),
   };
 }
 

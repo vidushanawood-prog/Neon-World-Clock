@@ -5,12 +5,9 @@ import {
   Clock,
   Cloud,
   Film,
-  Maximize2,
-  Minimize2,
   Play,
   Plus,
   RefreshCw,
-  Server,
   Star,
   User,
   X,
@@ -23,37 +20,50 @@ import {
   getMovieYear,
   getPosterUrl,
   getProfileUrl,
-  MOVIE_STREAM_SERVERS,
   pickOfficialTrailer,
+  searchMovies,
   type TmdbMovie,
   type TmdbMovieDetails,
 } from '../services/tmdb';
+import {
+  findVerifiedOpenMovieByArchiveId,
+  findVerifiedOpenMovieByTmdbId,
+  hashArchiveIdentifierToMovieId,
+  lookupArchiveStreamForTmdbMovie,
+  openMovieToTmdbShape,
+  resolveArchiveMoviePlayback,
+  VERIFIED_OPEN_MOVIES,
+  type ResolvedArchivePlayback,
+} from '../services/archiveMovies';
+import { NativeMoviePlayer } from '../components/NativeMoviePlayer';
+import type { MovieNavigationTarget } from './MoviesPage';
 
 interface MovieDetailPageProps {
-  movieId: number;
+  movieId?: number;
+  archiveId?: string;
   watchlistIds: Set<number>;
   isCloudSynced: boolean;
   onToggleWatchlist: (movie: TmdbMovie) => Promise<'added' | 'removed'>;
   onBackToMovies: () => void;
-  onOpenMovie: (movieId: number) => void;
+  onOpenMovie: (target: MovieNavigationTarget) => void;
 }
 
 export const MovieDetailPage: React.FC<MovieDetailPageProps> = React.memo(
   ({
     movieId,
+    archiveId,
     watchlistIds,
     isCloudSynced,
     onToggleWatchlist,
     onBackToMovies,
     onOpenMovie,
   }) => {
-    const [details, setDetails] = useState<TmdbMovieDetails | null>(null);
+    const [tmdbDetails, setTmdbDetails] = useState<TmdbMovieDetails | null>(null);
+    const [archivePlayback, setArchivePlayback] = useState<ResolvedArchivePlayback | null>(null);
     const [isLoading, setIsLoading] = useState<boolean>(true);
+    const [isSearchingArchive, setIsSearchingArchive] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
 
-    const [activeServerIdx, setActiveServerIdx] = useState<number>(0);
-    const [playerReloadNonce, setPlayerReloadNonce] = useState<number>(0);
-    const [isCinemaWide, setIsCinemaWide] = useState<boolean>(false);
     const [showTrailerModal, setShowTrailerModal] = useState<boolean>(false);
     const [posterFailed, setPosterFailed] = useState<boolean>(false);
     const [backdropFailed, setBackdropFailed] = useState<boolean>(false);
@@ -65,30 +75,97 @@ export const MovieDetailPage: React.FC<MovieDetailPageProps> = React.memo(
     useEffect(() => {
       const controller = new AbortController();
       setIsLoading(true);
+      setIsSearchingArchive(false);
       setError(null);
-      setActiveServerIdx(0);
-      setPlayerReloadNonce(0);
+      setTmdbDetails(null);
+      setArchivePlayback(null);
       setShowTrailerModal(false);
       setPosterFailed(false);
       setBackdropFailed(false);
       setBrokenProfiles({});
       setBrokenSimilarPosters({});
 
-      fetchMovieDetails(movieId, controller.signal)
-        .then((data) => {
+      const loadAll = async () => {
+        try {
+          const builtinByArchive = archiveId
+            ? findVerifiedOpenMovieByArchiveId(archiveId)
+            : null;
+          const builtinByTmdb = movieId ? findVerifiedOpenMovieByTmdbId(movieId) : null;
+          const matchedBuiltin = builtinByArchive || builtinByTmdb;
+
+          const effectiveArchiveId = archiveId || matchedBuiltin?.archiveId;
+          const effectiveTmdbId = movieId || matchedBuiltin?.tmdbId;
+
+          // 1. Resolve Archive.org / built-in direct MP4/HLS streams in parallel with TMDB metadata
+          const archivePromise = effectiveArchiveId
+            ? resolveArchiveMoviePlayback(effectiveArchiveId, controller.signal)
+            : Promise.resolve(null);
+          const tmdbPromise = effectiveTmdbId
+            ? fetchMovieDetails(effectiveTmdbId, controller.signal).catch(() => null)
+            : Promise.resolve(null);
+
+          const [resolvedArchive, resolvedTmdb] = await Promise.all([archivePromise, tmdbPromise]);
           if (controller.signal.aborted) return;
-          setDetails(data);
-        })
-        .catch((err) => {
+
+          if (resolvedArchive) setArchivePlayback(resolvedArchive);
+          if (resolvedTmdb) setTmdbDetails(resolvedTmdb);
+
+          if (!resolvedArchive && !resolvedTmdb) {
+            setError('Could not load movie metadata or stream details.');
+            return;
+          }
+
+          setIsLoading(false);
+
+          // 2A. If opened as a dynamic Internet Archive film without TMDB ID, enrich metadata from TMDB in the background
+          if (resolvedArchive && !resolvedTmdb && resolvedArchive.title) {
+            searchMovies(resolvedArchive.title, 1, controller.signal)
+              .then(async (searchRes) => {
+                if (controller.signal.aborted || searchRes.results.length === 0) return;
+                const best =
+                  searchRes.results.find(
+                    (m) =>
+                      resolvedArchive.year &&
+                      getMovieYear(m.release_date) === resolvedArchive.year
+                  ) || searchRes.results[0];
+                if (!best) return;
+                const full = await fetchMovieDetails(best.id, controller.signal);
+                if (!controller.signal.aborted) setTmdbDetails(full);
+              })
+              .catch(() => {
+                // Keep Archive.org metadata intact
+              });
+          }
+
+          // 2B. If opened as a TMDB film without a known Archive ID, check Internet Archive for a matching public-domain full stream
+          if (resolvedTmdb && !resolvedArchive) {
+            setIsSearchingArchive(true);
+            lookupArchiveStreamForTmdbMovie(
+              resolvedTmdb.id,
+              resolvedTmdb.title,
+              getMovieYear(resolvedTmdb.release_date),
+              controller.signal
+            )
+              .then((found) => {
+                if (!controller.signal.aborted && found) {
+                  setArchivePlayback(found);
+                }
+              })
+              .finally(() => {
+                if (!controller.signal.aborted) setIsSearchingArchive(false);
+              });
+          }
+        } catch (err) {
           if (controller.signal.aborted) return;
           setError(err instanceof Error ? err.message : 'Unable to load movie details.');
-        })
-        .finally(() => {
+        } finally {
           if (!controller.signal.aborted) setIsLoading(false);
-        });
+        }
+      };
 
+      void loadAll();
       return () => controller.abort();
-    }, [movieId]);
+    }, [movieId, archiveId]);
 
     // Close trailer modal on Escape key
     useEffect(() => {
@@ -100,44 +177,91 @@ export const MovieDetailPage: React.FC<MovieDetailPageProps> = React.memo(
       return () => window.removeEventListener('keydown', onKeyDown);
     }, [showTrailerModal]);
 
-    const activeServer = MOVIE_STREAM_SERVERS[activeServerIdx] || MOVIE_STREAM_SERVERS[0];
-    const embedStreamUrl = useMemo(
-      () => activeServer.buildUrl(movieId),
-      [activeServer, movieId]
-    );
-
     const trailer = useMemo(
-      () => pickOfficialTrailer(details?.videos?.results),
-      [details?.videos?.results]
+      () => pickOfficialTrailer(tmdbDetails?.videos?.results),
+      [tmdbDetails?.videos?.results]
     );
 
     const castMembers = useMemo(
-      () => (details?.credits?.cast || []).slice(0, 14),
-      [details?.credits?.cast]
+      () => (tmdbDetails?.credits?.cast || []).slice(0, 14),
+      [tmdbDetails?.credits?.cast]
     );
 
     const similarMovies = useMemo(
-      () => (details?.similar?.results || []).slice(0, 14),
-      [details?.similar?.results]
+      () => (tmdbDetails?.similar?.results || []).slice(0, 14),
+      [tmdbDetails?.similar?.results]
     );
 
-    const inWatchlist = watchlistIds.has(movieId);
+    const freeSpotlightMovies = useMemo(
+      () =>
+        VERIFIED_OPEN_MOVIES.filter((m) => m.archiveId !== archivePlayback?.archiveId)
+          .slice(0, 10)
+          .map(openMovieToTmdbShape),
+      [archivePlayback?.archiveId]
+    );
+
+    // Unified movie object for My List / Watchlist sync (always has valid numeric ID 1..999_999_999)
+    const effectiveNumericId = useMemo(() => {
+      if (tmdbDetails?.id) return tmdbDetails.id;
+      if (movieId) return movieId;
+      if (archivePlayback?.archiveId) {
+        const builtin = findVerifiedOpenMovieByArchiveId(archivePlayback.archiveId);
+        return builtin?.id || hashArchiveIdentifierToMovieId(archivePlayback.archiveId);
+      }
+      if (archiveId) return hashArchiveIdentifierToMovieId(archiveId);
+      return 0;
+    }, [tmdbDetails?.id, movieId, archivePlayback?.archiveId, archiveId]);
+
+    const displayTitle = tmdbDetails?.title || archivePlayback?.title || 'Movie';
+    const displayTagline = tmdbDetails?.tagline || '';
+    const displayYear =
+      (tmdbDetails?.release_date && getMovieYear(tmdbDetails.release_date)) ||
+      archivePlayback?.year ||
+      'TBA';
+    const displayRuntime = formatRuntime(tmdbDetails?.runtime);
+    const displayRating =
+      tmdbDetails && tmdbDetails.vote_average > 0 ? tmdbDetails.vote_average.toFixed(1) : null;
+    const displayOverview = tmdbDetails?.overview || archivePlayback?.overview || '';
+    const displayGenres = tmdbDetails?.genres?.map((g) => g.name) || [];
+
+    const backdropUrl =
+      getBackdropUrl(tmdbDetails?.backdrop_path, 'w1280') || archivePlayback?.posterUrl || null;
+    const posterUrl =
+      getPosterUrl(tmdbDetails?.poster_path, 'w500') || archivePlayback?.posterUrl || null;
+
+    const inWatchlist = effectiveNumericId > 0 && watchlistIds.has(effectiveNumericId);
 
     const handleScrollToPlayer = useCallback(() => {
       playerSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, []);
 
     const handleToggleList = useCallback(() => {
-      if (!details) return;
-      void onToggleWatchlist(details);
-    }, [details, onToggleWatchlist]);
+      if (!effectiveNumericId) return;
+      const moviePayload: TmdbMovie = {
+        id: effectiveNumericId,
+        title: displayTitle,
+        overview: displayOverview,
+        poster_path: tmdbDetails?.poster_path || archivePlayback?.posterUrl || null,
+        backdrop_path: tmdbDetails?.backdrop_path || archivePlayback?.posterUrl || null,
+        release_date:
+          tmdbDetails?.release_date || (archivePlayback?.year ? `${archivePlayback.year}-01-01` : ''),
+        vote_average: tmdbDetails?.vote_average || 7.0,
+        vote_count: tmdbDetails?.vote_count || 0,
+        popularity: tmdbDetails?.popularity || 0,
+        archiveId: archivePlayback?.archiveId,
+        isFreeFullMovie: Boolean(archivePlayback),
+      };
+      void onToggleWatchlist(moviePayload);
+    }, [
+      effectiveNumericId,
+      displayTitle,
+      displayOverview,
+      tmdbDetails,
+      archivePlayback,
+      onToggleWatchlist,
+    ]);
 
-    const backdropUrl = details ? getBackdropUrl(details.backdrop_path, 'w1280') : null;
-    const posterUrl = details ? getPosterUrl(details.poster_path, 'w500') : null;
-    const year = getMovieYear(details?.release_date);
-    const runtimeLabel = formatRuntime(details?.runtime);
-    const ratingLabel =
-      details && details.vote_average > 0 ? details.vote_average.toFixed(1) : null;
+    const hasDirectFullStream = Boolean(archivePlayback && archivePlayback.sources.length > 0);
 
     return (
       <div className="space-y-8">
@@ -161,12 +285,12 @@ export const MovieDetailPage: React.FC<MovieDetailPageProps> = React.memo(
         </div>
 
         {/* Loading / Error State */}
-        {isLoading && !details ? (
+        {isLoading && !tmdbDetails && !archivePlayback ? (
           <div className="space-y-6">
             <div className="h-[340px] w-full animate-pulse rounded-3xl bg-white/[0.05]" />
             <div className="aspect-video w-full animate-pulse rounded-3xl bg-white/[0.05]" />
           </div>
-        ) : error && !details ? (
+        ) : error && !tmdbDetails && !archivePlayback ? (
           <div className="rounded-3xl border border-rose-400/30 bg-rose-500/10 p-8 text-center">
             <p className="text-sm font-semibold text-rose-200">{error}</p>
             <button
@@ -178,7 +302,7 @@ export const MovieDetailPage: React.FC<MovieDetailPageProps> = React.memo(
               <span>Back to Movies</span>
             </button>
           </div>
-        ) : details ? (
+        ) : (
           <>
             {/* 1. Netflix-Style Movie Details Hero Header */}
             <section
@@ -188,7 +312,7 @@ export const MovieDetailPage: React.FC<MovieDetailPageProps> = React.memo(
               {backdropUrl && !backdropFailed ? (
                 <img
                   src={backdropUrl}
-                  alt={details.title}
+                  alt={displayTitle}
                   referrerPolicy="no-referrer"
                   onError={() => setBackdropFailed(true)}
                   className="absolute inset-0 h-full w-full object-cover object-center opacity-40"
@@ -209,7 +333,7 @@ export const MovieDetailPage: React.FC<MovieDetailPageProps> = React.memo(
                     {posterUrl && !posterFailed ? (
                       <img
                         src={posterUrl}
-                        alt={details.title}
+                        alt={displayTitle}
                         referrerPolicy="no-referrer"
                         onError={() => setPosterFailed(true)}
                         className="h-full w-full object-cover"
@@ -217,7 +341,7 @@ export const MovieDetailPage: React.FC<MovieDetailPageProps> = React.memo(
                     ) : (
                       <div className="flex h-full w-full flex-col items-center justify-center p-4 text-center">
                         <Film className="h-10 w-10 text-sky-400/60" aria-hidden="true" />
-                        <p className="mt-2 text-xs font-semibold text-slate-300">{details.title}</p>
+                        <p className="mt-2 text-xs font-semibold text-slate-300">{displayTitle}</p>
                       </div>
                     )}
                   </div>
@@ -227,28 +351,28 @@ export const MovieDetailPage: React.FC<MovieDetailPageProps> = React.memo(
                 <div className="flex flex-col justify-center space-y-4">
                   <div>
                     <h1 className="text-2xl font-bold tracking-tight text-white sm:text-3xl lg:text-4xl [text-wrap:balance]">
-                      {details.title}
+                      {displayTitle}
                     </h1>
-                    {details.tagline && (
-                      <p className="mt-1.5 text-sm italic text-sky-200/85">{details.tagline}</p>
+                    {displayTagline && (
+                      <p className="mt-1.5 text-sm italic text-sky-200/85">{displayTagline}</p>
                     )}
                   </div>
 
                   {/* Clean Unboxed Metadata Row */}
                   <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs font-medium text-slate-300 sm:text-sm tabular-nums">
-                    <span>{year}</span>
-                    {runtimeLabel && (
+                    <span>{displayYear}</span>
+                    {displayRuntime && (
                       <>
                         <span aria-hidden="true" className="text-slate-500">
                           ·
                         </span>
                         <span className="inline-flex items-center gap-1">
                           <Clock className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
-                          {runtimeLabel}
+                          {displayRuntime}
                         </span>
                       </>
                     )}
-                    {ratingLabel && (
+                    {displayRating && (
                       <>
                         <span aria-hidden="true" className="text-slate-500">
                           ·
@@ -258,25 +382,33 @@ export const MovieDetailPage: React.FC<MovieDetailPageProps> = React.memo(
                             className="h-3.5 w-3.5 fill-amber-400 text-amber-400"
                             aria-hidden="true"
                           />
-                          {ratingLabel} / 10
+                          {displayRating} / 10
                         </span>
                       </>
                     )}
-                    {details.genres.length > 0 && (
+                    {displayGenres.length > 0 && (
                       <>
                         <span aria-hidden="true" className="text-slate-500">
                           ·
                         </span>
-                        <span className="text-cyan-200">
-                          {details.genres.map((g) => g.name).join(' / ')}
+                        <span className="text-cyan-200">{displayGenres.join(' / ')}</span>
+                      </>
+                    )}
+                    {archivePlayback?.licenseLabel && (
+                      <>
+                        <span aria-hidden="true" className="text-slate-500">
+                          ·
+                        </span>
+                        <span className="font-semibold text-emerald-300">
+                          {archivePlayback.licenseLabel}
                         </span>
                       </>
                     )}
                   </div>
 
-                  {details.overview && (
+                  {displayOverview && (
                     <p className="max-w-3xl text-sm leading-relaxed text-slate-200/90 sm:text-[15px]">
-                      {details.overview}
+                      {displayOverview}
                     </p>
                   )}
 
@@ -288,25 +420,21 @@ export const MovieDetailPage: React.FC<MovieDetailPageProps> = React.memo(
                       className="inline-flex h-11 items-center gap-2 rounded-xl bg-sky-500 px-6 text-sm font-bold text-slate-950 shadow-[0_0_24px_-6px_rgba(56,189,248,0.8)] transition-colors hover:bg-sky-400 whitespace-nowrap"
                     >
                       <Play className="h-4 w-4 fill-current" aria-hidden="true" />
-                      <span>Watch Movie</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setShowTrailerModal(true)}
-                      disabled={!trailer}
-                      title={
-                        trailer
-                          ? `Play ${trailer.name}`
-                          : 'No official YouTube trailer available on TMDB'
-                      }
-                      className="inline-flex h-11 items-center gap-2 rounded-xl border border-rose-400/40 bg-rose-500/15 px-5 text-sm font-semibold text-rose-100 transition-colors hover:border-rose-400/70 hover:bg-rose-500/25 disabled:cursor-not-allowed disabled:opacity-45 whitespace-nowrap"
-                    >
-                      <Youtube className="h-4 w-4 text-rose-400" aria-hidden="true" />
                       <span>
-                        {trailer ? 'Watch Official Trailer' : 'Trailer Unavailable'}
+                        {hasDirectFullStream ? 'Watch Full Movie (Ad-Free)' : 'Watch Preview'}
                       </span>
                     </button>
+
+                    {trailer && (
+                      <button
+                        type="button"
+                        onClick={() => setShowTrailerModal(true)}
+                        className="inline-flex h-11 items-center gap-2 rounded-xl border border-rose-400/40 bg-rose-500/15 px-5 text-sm font-semibold text-rose-100 transition-colors hover:border-rose-400/70 hover:bg-rose-500/25 whitespace-nowrap"
+                      >
+                        <Youtube className="h-4 w-4 text-rose-400" aria-hidden="true" />
+                        <span>Watch Official Trailer</span>
+                      </button>
+                    )}
 
                     <button
                       type="button"
@@ -334,122 +462,132 @@ export const MovieDetailPage: React.FC<MovieDetailPageProps> = React.memo(
               </div>
             </section>
 
-            {/* 2. Full Movie Stream Player with 1-Click Server Switcher */}
+            {/* 2. Ad-Free Cinema Player Section (Native HTML5/HLS Full Movie OR Official HD Trailer) */}
             <section
               ref={playerSectionRef}
-              aria-label="Full movie stream player"
-              className="space-y-3 scroll-mt-20"
+              aria-label="Ad-free movie player"
+              className="scroll-mt-20 space-y-4"
             >
-              <div className="flex flex-col justify-between gap-3 rounded-2xl border border-white/[0.09] bg-[#071022]/90 p-4 sm:flex-row sm:items-center">
-                <div className="flex items-center gap-2.5">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-sky-500/18 text-sky-400">
-                    <Server className="h-4 w-4" aria-hidden="true" />
-                  </span>
-                  <div className="min-w-0">
-                    <h2 className="text-sm font-bold text-white">Stream Server Switcher</h2>
-                    <p className="text-xs text-slate-400">
-                      Switch servers with one click if playback is slow or blocked
-                    </p>
+              {hasDirectFullStream && archivePlayback ? (
+                <NativeMoviePlayer
+                  title={displayTitle}
+                  posterUrl={backdropUrl}
+                  sources={archivePlayback.sources}
+                  captions={archivePlayback.captions}
+                  autoPlay={false}
+                />
+              ) : isSearchingArchive ? (
+                <div className="flex flex-col items-center justify-center rounded-3xl border border-sky-400/25 bg-[#071022]/90 px-6 py-16 text-center">
+                  <RefreshCw className="h-7 w-7 animate-spin text-sky-400" aria-hidden="true" />
+                  <p className="mt-3 text-sm font-semibold text-white">
+                    Checking Internet Archive for a direct ad-free full stream…
+                  </p>
+                </div>
+              ) : trailer ? (
+                <div className="space-y-3">
+                  <div className="flex flex-col justify-between gap-2 rounded-2xl border border-white/[0.09] bg-[#071022]/90 p-4 sm:flex-row sm:items-center">
+                    <div className="min-w-0">
+                      <h2 className="text-sm font-bold text-white">
+                        Official HD Trailer · {displayTitle}
+                      </h2>
+                      <p className="text-xs text-slate-400">
+                        This theatrical release is not in the public domain — enjoy its ad-free
+                        official trailer here, or watch full open-access movies below.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mx-auto max-w-5xl overflow-hidden rounded-3xl border border-sky-400/35 bg-black shadow-[0_24px_64px_-22px_rgba(14,165,233,0.4)]">
+                    <div className="aspect-video w-full bg-black">
+                      <iframe
+                        src={`https://www.youtube.com/embed/${encodeURIComponent(trailer.key)}?rel=0`}
+                        title={`${displayTitle} — Official Trailer`}
+                        className="h-full w-full border-0"
+                        allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                        allowFullScreen
+                        referrerPolicy="strict-origin-when-cross-origin"
+                      />
+                    </div>
                   </div>
                 </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setPlayerReloadNonce((n) => n + 1)}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-white/12 bg-white/[0.05] px-3 text-xs font-semibold text-slate-200 transition-colors hover:border-sky-400/45 hover:text-white whitespace-nowrap"
-                  >
-                    <RefreshCw className="h-3.5 w-3.5 text-cyan-300" aria-hidden="true" />
-                    <span>Reload</span>
-                  </button>
-
-                  <a
-                    href={embedStreamUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-sky-400/35 bg-sky-500/12 px-3 text-xs font-semibold text-sky-200 transition-colors hover:border-sky-400/65 hover:bg-sky-500/20 hover:text-white whitespace-nowrap"
-                  >
-                    <span>Open Stream in New Tab ↗</span>
-                  </a>
-
-                  <button
-                    type="button"
-                    onClick={() => setIsCinemaWide((w) => !w)}
-                    className="hidden h-9 items-center gap-1.5 rounded-xl border border-white/12 bg-white/[0.05] px-3 text-xs font-semibold text-slate-200 transition-colors hover:border-sky-400/45 hover:text-white whitespace-nowrap md:inline-flex"
-                  >
-                    {isCinemaWide ? (
-                      <>
-                        <Minimize2 className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
-                        <span>Standard View</span>
-                      </>
-                    ) : (
-                      <>
-                        <Maximize2 className="h-3.5 w-3.5 text-sky-400" aria-hidden="true" />
-                        <span>Cinema Wide</span>
-                      </>
-                    )}
-                  </button>
+              ) : (
+                <div className="rounded-3xl border border-white/[0.09] bg-[#071022]/90 p-8 text-center">
+                  <Film className="mx-auto h-9 w-9 text-sky-400/70" aria-hidden="true" />
+                  <h2 className="mt-3 text-base font-bold text-white">
+                    No Free Public-Domain Full Stream Available
+                  </h2>
+                  <p className="mx-auto mt-1.5 max-w-lg text-xs leading-relaxed text-slate-400">
+                    To keep Neon World Clock 100% free of pop-up ads and robot walls, full playback
+                    uses direct MP4/HLS streams from Internet Archive and open-access cinema. Pick
+                    any full-length ad-free movie below to watch immediately.
+                  </p>
                 </div>
-              </div>
-
-              {/* Server Selection Buttons */}
-              <div
-                role="tablist"
-                aria-label="Select movie streaming server"
-                className="flex flex-wrap items-center gap-2"
-              >
-                {MOVIE_STREAM_SERVERS.map((server, idx) => {
-                  const isActive = idx === activeServerIdx;
-                  return (
-                    <button
-                      key={server.id}
-                      type="button"
-                      role="tab"
-                      aria-selected={isActive}
-                      onClick={() => {
-                        setActiveServerIdx(idx);
-                        setPlayerReloadNonce((n) => n + 1);
-                      }}
-                      className={`inline-flex h-10 items-center gap-2 rounded-xl px-4 text-xs font-semibold transition-colors whitespace-nowrap ${
-                        isActive
-                          ? 'bg-sky-500 text-slate-950 shadow-[0_0_20px_-6px_rgba(56,189,248,0.85)]'
-                          : 'border border-white/12 bg-[#071022]/90 text-slate-200 hover:border-sky-400/45 hover:text-white'
-                      }`}
-                    >
-                      <span>{server.name}</span>
-                      <span
-                        className={`text-[11px] font-medium ${
-                          isActive ? 'text-slate-900/80' : 'text-slate-400'
-                        }`}
-                      >
-                        · {server.qualityLabel}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Embedded Full-Movie Player Stage */}
-              <div
-                className={`overflow-hidden rounded-3xl border border-sky-400/35 bg-black shadow-[0_24px_64px_-22px_rgba(14,165,233,0.4)] transition-all ${
-                  isCinemaWide ? 'w-full' : 'mx-auto max-w-5xl'
-                }`}
-              >
-                <div className="relative aspect-video w-full bg-black">
-                  <iframe
-                    key={`${movieId}-${activeServer.id}-${playerReloadNonce}`}
-                    src={embedStreamUrl}
-                    title={`${details.title} — ${activeServer.name}`}
-                    className="h-full w-full border-0"
-                    allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                    allowFullScreen
-                    referrerPolicy="origin"
-                  />
-                </div>
-              </div>
+              )}
             </section>
 
-            {/* 3. Top Billed Cast */}
+            {/* 3. Ad-Free Full Movies Quick Switcher (shown prominently when viewing a trailer-only TMDB title) */}
+            {!hasDirectFullStream && freeSpotlightMovies.length > 0 && (
+              <section aria-label="Ad-free full movies ready to watch now" className="space-y-3">
+                <div>
+                  <h2 className="text-base font-bold tracking-tight text-white sm:text-lg">
+                    Watch Full-Length Ad-Free Movies Right Now
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    Verified direct MP4 &amp; HLS open-access films playing natively with zero ads
+                  </p>
+                </div>
+
+                <div className="no-scrollbar flex gap-3.5 overflow-x-auto pb-2 sm:gap-4">
+                  {freeSpotlightMovies.map((fm) => {
+                    const fmPoster = getPosterUrl(fm.poster_path, 'w342');
+                    const showPoster = Boolean(fmPoster && !brokenSimilarPosters[fm.id]);
+                    return (
+                      <button
+                        key={fm.archiveId || fm.id}
+                        type="button"
+                        onClick={() =>
+                          onOpenMovie({ id: fm.id, archiveId: fm.archiveId })
+                        }
+                        className="group w-[144px] shrink-0 rounded-2xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 sm:w-[164px]"
+                      >
+                        <div className="aspect-[2/3] w-full overflow-hidden rounded-2xl border border-emerald-400/25 bg-[#081226] transition-transform duration-200 ease-out will-change-transform group-hover:scale-[1.03] group-hover:border-emerald-400/60">
+                          {showPoster ? (
+                            <img
+                              src={fmPoster!}
+                              alt={fm.title}
+                              loading="lazy"
+                              decoding="async"
+                              referrerPolicy="no-referrer"
+                              onError={() =>
+                                setBrokenSimilarPosters((prev) => ({ ...prev, [fm.id]: true }))
+                              }
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-full w-full flex-col items-center justify-center p-3 text-center">
+                              <Film className="h-7 w-7 text-emerald-400/70" aria-hidden="true" />
+                              <p className="mt-2 line-clamp-3 text-xs font-semibold text-slate-200">
+                                {fm.title}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                        <p className="mt-2 truncate text-xs font-semibold text-white group-hover:text-emerald-300">
+                          {fm.title}
+                        </p>
+                        <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-slate-400 tabular-nums">
+                          <span>{getMovieYear(fm.release_date)}</span>
+                          <span aria-hidden="true">·</span>
+                          <span className="font-semibold text-emerald-300">Free HD</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+
+            {/* 4. Top Billed Cast */}
             {castMembers.length > 0 && (
               <section aria-label="Top billed cast" className="space-y-3">
                 <h2 className="text-base font-bold tracking-tight text-white sm:text-lg">
@@ -496,7 +634,7 @@ export const MovieDetailPage: React.FC<MovieDetailPageProps> = React.memo(
               </section>
             )}
 
-            {/* 4. Similar Movies Row */}
+            {/* 5. Similar Movies Row */}
             {similarMovies.length > 0 && (
               <section aria-label="Similar movies" className="space-y-3">
                 <div>
@@ -504,7 +642,7 @@ export const MovieDetailPage: React.FC<MovieDetailPageProps> = React.memo(
                     More Like This
                   </h2>
                   <p className="text-xs text-slate-400">
-                    Click any title to open its stream player and cast details
+                    Click any title to explore details, cast, and playback
                   </p>
                 </div>
 
@@ -517,8 +655,8 @@ export const MovieDetailPage: React.FC<MovieDetailPageProps> = React.memo(
                       <button
                         key={sim.id}
                         type="button"
-                        onClick={() => onOpenMovie(sim.id)}
-                        className="group w-[144px] shrink-0 text-left sm:w-[164px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 rounded-2xl"
+                        onClick={() => onOpenMovie({ id: sim.id })}
+                        className="group w-[144px] shrink-0 rounded-2xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 sm:w-[164px]"
                       >
                         <div className="aspect-[2/3] w-full overflow-hidden rounded-2xl border border-white/[0.09] bg-[#081226] transition-transform duration-200 ease-out will-change-transform group-hover:scale-[1.03] group-hover:border-sky-400/45">
                           {showSimPoster ? (
@@ -567,14 +705,14 @@ export const MovieDetailPage: React.FC<MovieDetailPageProps> = React.memo(
               </section>
             )}
           </>
-        ) : null}
+        )}
 
         {/* Official YouTube Trailer Lightbox Modal */}
         {showTrailerModal && trailer && (
           <div
             role="dialog"
             aria-modal="true"
-            aria-label={`${details?.title || 'Movie'} official trailer`}
+            aria-label={`${displayTitle} official trailer`}
             className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 p-4 backdrop-blur-sm"
             onClick={() => setShowTrailerModal(false)}
           >
@@ -585,7 +723,7 @@ export const MovieDetailPage: React.FC<MovieDetailPageProps> = React.memo(
               <div className="flex items-center justify-between gap-3 border-b border-white/[0.08] px-5 py-3.5">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-bold text-white">
-                    {details?.title} — Official Trailer
+                    {displayTitle} — Official Trailer
                   </p>
                   <p className="truncate text-xs text-slate-400">{trailer.name}</p>
                 </div>

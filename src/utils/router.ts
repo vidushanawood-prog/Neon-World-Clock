@@ -14,14 +14,15 @@ export type AppRoute =
   | { page: 'live-radio'; code?: string }
   | { page: 'entertainment-live' }
   | { page: 'movies' }
-  | { page: 'movie-detail'; id: number }
+  | { page: 'movie-detail'; id?: number; archiveId?: string }
   | { page: 'account' };
 
 export function parseHashRoute(rawHash: string): AppRoute {
   const cleaned = rawHash.replace(/^#/, '').trim();
   const [pathPart, queryPart] = cleaned.split('?');
   const normalized = (pathPart || '/').replace(/^\/+|\/+$/g, '');
-  const segments = normalized ? normalized.split('/').map((s) => decodeURIComponent(s.toLowerCase())) : [];
+  const rawSegments = normalized ? normalized.split('/').map((s) => decodeURIComponent(s)) : [];
+  const segments = rawSegments.map((s) => s.toLowerCase());
 
   if (segments.length === 0) {
     return { page: 'home' };
@@ -65,6 +66,12 @@ export function parseHashRoute(rawHash: string): AppRoute {
     case 'entertainment-live':
       return { page: 'entertainment-live' };
     case 'movies': {
+      if (param === 'archive' && rawSegments[2]) {
+        const archiveId = rawSegments[2].trim();
+        if (/^[a-zA-Z0-9._\-]+$/.test(archiveId) && archiveId.length <= 160) {
+          return { page: 'movie-detail', archiveId };
+        }
+      }
       if (param && /^\d{1,12}$/.test(param)) {
         const parsedId = Number.parseInt(param, 10);
         if (Number.isSafeInteger(parsedId) && parsedId > 0) {
@@ -119,7 +126,10 @@ export function routeToHash(route: AppRoute): string {
     case 'movies':
       return '#/movies';
     case 'movie-detail':
-      return `#/movies/${route.id}`;
+      if (route.archiveId) {
+        return `#/movies/archive/${encodeURIComponent(route.archiveId)}`;
+      }
+      return route.id ? `#/movies/${route.id}` : '#/movies';
     case 'account':
       return '#/account';
   }

@@ -25,6 +25,10 @@ export interface TmdbMovie {
   genres?: TmdbGenre[];
   adult?: boolean;
   original_language?: string;
+  /** Present when directly playable ad-free from Internet Archive / open-access catalog */
+  archiveId?: string;
+  isFreeFullMovie?: boolean;
+  licenseLabel?: string;
 }
 
 export interface TmdbCastMember {
@@ -92,40 +96,6 @@ export interface TmdbPagedResult {
   results: TmdbMovie[];
 }
 
-export interface MovieStreamServer {
-  id: string;
-  name: string;
-  qualityLabel: string;
-  buildUrl: (tmdbId: number) => string;
-}
-
-export const MOVIE_STREAM_SERVERS: MovieStreamServer[] = [
-  {
-    id: 'vidsrc-cc',
-    name: 'Server 1 · VidSrc CC',
-    qualityLabel: 'Fast HD',
-    buildUrl: (id) => `https://vidsrc.cc/v2/embed/movie/${id}`,
-  },
-  {
-    id: 'vidsrc-xyz',
-    name: 'Server 2 · VidSrc XYZ',
-    qualityLabel: 'Mirror HD',
-    buildUrl: (id) => `https://vidsrc.xyz/embed/movie/${id}`,
-  },
-  {
-    id: 'multiembed',
-    name: 'Server 3 · MultiEmbed',
-    qualityLabel: 'Global',
-    buildUrl: (id) => `https://multiembed.mov/?video_id=${id}&tmdb=1`,
-  },
-  {
-    id: 'autoembed',
-    name: 'Server 4 · AutoEmbed',
-    qualityLabel: 'Backup',
-    buildUrl: (id) => `https://player.autoembed.cc/embed/movie/${id}`,
-  },
-];
-
 export const MOVIE_GENRE_MAP: Record<number, string> = {
   28: 'Action',
   12: 'Adventure',
@@ -156,6 +126,7 @@ export interface CategoryQuickChip {
 
 export const MOVIE_CATEGORY_TABS: CategoryQuickChip[] = [
   { id: 'browse', label: 'Browse All' },
+  { id: 'free-full', label: 'Free Full Movies' },
   { id: 'my-list', label: 'My List' },
   { id: 'action', label: 'Action', genreParam: '28' },
   { id: 'scifi-fantasy', label: 'Sci-Fi & Fantasy', genreParam: '878|14' },
@@ -248,6 +219,7 @@ export function getPosterUrl(
   size: 'w185' | 'w342' | 'w500' = 'w342'
 ): string | null {
   if (!path) return null;
+  if (path.startsWith('https://')) return path;
   return `${TMDB_IMAGE_BASE}/${size}${path}`;
 }
 
@@ -256,6 +228,7 @@ export function getBackdropUrl(
   size: 'w780' | 'w1280' | 'original' = 'w1280'
 ): string | null {
   if (!path) return null;
+  if (path.startsWith('https://')) return path;
   return `${TMDB_IMAGE_BASE}/${size}${path}`;
 }
 
