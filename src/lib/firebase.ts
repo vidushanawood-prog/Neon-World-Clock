@@ -44,6 +44,7 @@ export interface FirestoreErrorInfo {
 
 export type SubscriptionPlan = 'free' | 'pro';
 export type ActivationMethod = 'none' | 'payment' | 'redeem' | 'admin';
+export type PaymentMethodType = 'none' | 'payhere_sandbox' | 'payhere_live' | 'redeem' | 'admin';
 
 export interface FirestoreUserProfile {
   uid: string;
@@ -54,6 +55,8 @@ export interface FirestoreUserProfile {
   proActivatedAt?: number | null;
   proExpiresAt?: number | null;
   activationMethod?: ActivationMethod;
+  paymentMethod?: PaymentMethodType;
+  lastOrderId?: string | null;
   isBanned?: boolean;
   celebrationShown?: boolean;
   createdAt?: Timestamp | null;
@@ -78,6 +81,17 @@ export function normalizeUserProfile(raw: Partial<FirestoreUserProfile>, fallbac
       raw.activationMethod === 'admin'
         ? raw.activationMethod
         : 'none',
+    paymentMethod:
+      raw.paymentMethod === 'payhere_sandbox' ||
+      raw.paymentMethod === 'payhere_live' ||
+      raw.paymentMethod === 'redeem' ||
+      raw.paymentMethod === 'admin'
+        ? raw.paymentMethod
+        : 'none',
+    lastOrderId:
+      typeof raw.lastOrderId === 'string' && raw.lastOrderId.trim().length > 0
+        ? raw.lastOrderId.trim().slice(0, 128)
+        : null,
     isBanned: Boolean(raw.isBanned),
     celebrationShown: typeof raw.celebrationShown === 'boolean' ? raw.celebrationShown : true,
     createdAt: raw.createdAt ?? null,
@@ -413,13 +427,27 @@ export function subscribeToAllUsers(
 export async function activateUserPro(
   uid: string,
   method: 'payment' | 'redeem',
-  durationMs: number = THIRTY_DAYS_MS
-): Promise<{ proActivatedAt: number; proExpiresAt: number }> {
+  durationMs: number = THIRTY_DAYS_MS,
+  options?: {
+    paymentMethod?: PaymentMethodType;
+    lastOrderId?: string | null;
+  }
+): Promise<{
+  proActivatedAt: number;
+  proExpiresAt: number;
+  paymentMethod: PaymentMethodType;
+  lastOrderId: string | null;
+}> {
   if (!db || !uid) {
     throw new Error('Firebase is not initialized.');
   }
   const now = Date.now();
   const proExpiresAt = now + durationMs;
+  const resolvedPaymentMethod: PaymentMethodType =
+    options?.paymentMethod || (method === 'redeem' ? 'redeem' : 'payhere_sandbox');
+  const rawOrderId = typeof options?.lastOrderId === 'string' ? options.lastOrderId.trim() : '';
+  const sanitizedOrderId = rawOrderId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128);
+  const safeLastOrderId = sanitizedOrderId.length > 0 ? sanitizedOrderId : null;
   const path = `users/${uid}`;
   try {
     await setDoc(
@@ -429,13 +457,20 @@ export async function activateUserPro(
         proActivatedAt: now,
         proExpiresAt,
         activationMethod: method,
+        paymentMethod: resolvedPaymentMethod,
+        lastOrderId: safeLastOrderId,
         isBanned: false,
         celebrationShown: false,
         updatedAt: serverTimestamp(),
       },
       { merge: true }
     );
-    return { proActivatedAt: now, proExpiresAt };
+    return {
+      proActivatedAt: now,
+      proExpiresAt,
+      paymentMethod: resolvedPaymentMethod,
+      lastOrderId: safeLastOrderId,
+    };
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -490,6 +525,7 @@ export async function adminSetUserPlan(
           proActivatedAt: now,
           proExpiresAt: now + THIRTY_DAYS_MS,
           activationMethod: 'admin' as const,
+          paymentMethod: 'admin' as const,
           isBanned: Boolean(targetUser.isBanned),
           celebrationShown: false,
           updatedAt: serverTimestamp(),
@@ -499,6 +535,7 @@ export async function adminSetUserPlan(
           proActivatedAt: targetUser.proActivatedAt ?? null,
           proExpiresAt: null,
           activationMethod: 'none' as const,
+          paymentMethod: 'none' as const,
           isBanned: Boolean(targetUser.isBanned),
           celebrationShown: true,
           updatedAt: serverTimestamp(),

@@ -1,31 +1,44 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   CheckCircle2,
   CreditCard,
   Crown,
   Gift,
   Globe2,
+  Info,
   Loader2,
   Lock,
   ShieldCheck,
   Sparkles,
   Tv,
-  Wallet,
   X,
 } from 'lucide-react';
+import type { PaymentMethodType } from '../lib/firebase';
 import { detectLocalizedProPrice, type LocalizedProPrice } from '../services/currencyDetection';
+import {
+  calculatePayHereCheckoutPricing,
+  ensurePayHereSdkLoaded,
+  getPayHerePaymentMethodTag,
+  PAYHERE_CONFIG,
+  startPayHereCheckout,
+} from '../services/payhere';
 import { PRO_BASE_PRICE_LKR, PRO_REDEEM_CODE } from '../services/subscription';
 
 interface UpgradeProModalProps {
   isOpen: boolean;
   reason?: string | null;
   liveUsdRates?: Record<string, number>;
+  userUid?: string | null;
+  userDisplayName?: string;
   userEmail: string | null;
   isSignedIn: boolean;
   onClose: () => void;
   onOpenAuth?: () => void;
   onCompleteActivation: (params: {
     method: 'payment' | 'redeem';
+    paymentMethod?: PaymentMethodType;
+    orderId?: string | null;
+    amountPaidDisplay?: string;
     localPriceDisplay: string;
     receiptEmail: string;
   }) => Promise<void>;
@@ -35,6 +48,8 @@ export const UpgradeProModal: React.FC<UpgradeProModalProps> = ({
   isOpen,
   reason,
   liveUsdRates,
+  userUid,
+  userDisplayName,
   userEmail,
   isSignedIn,
   onClose,
@@ -42,16 +57,13 @@ export const UpgradeProModal: React.FC<UpgradeProModalProps> = ({
   onCompleteActivation,
 }) => {
   const [priceInfo, setPriceInfo] = useState<LocalizedProPrice | null>(null);
-  const [paymentMethod, setPaymentMethod] = useState<'card' | 'wallet'>('card');
-  const [cardHolder, setCardHolder] = useState('');
-  const [cardLastFourInput, setCardLastFourInput] = useState('');
-  const [cardExpiry, setCardExpiry] = useState('');
-  const [cardCvc, setCardCvc] = useState('');
   const [receiptEmailInput, setReceiptEmailInput] = useState(userEmail || '');
   const [redeemCode, setRedeemCode] = useState('');
   const [redeemError, setRedeemError] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
-  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [paymentNotice, setPaymentNotice] = useState<string | null>(null);
+  const [isLaunchingPayHere, setIsLaunchingPayHere] = useState(false);
+  const [isActivatingPro, setIsActivatingPro] = useState(false);
   const [isRedeeming, setIsRedeeming] = useState(false);
 
   useEffect(() => {
@@ -65,74 +77,96 @@ export const UpgradeProModal: React.FC<UpgradeProModalProps> = ({
     let cancelled = false;
     setRedeemError(null);
     setPaymentError(null);
+    setPaymentNotice(null);
+    setIsLaunchingPayHere(false);
+    setIsActivatingPro(false);
+
     void detectLocalizedProPrice(liveUsdRates).then((info) => {
       if (!cancelled) setPriceInfo(info);
     });
+
+    // Warm up PayHere JS SDK in the background while modal is open
+    void ensurePayHereSdkLoaded().catch(() => {
+      // Errors will be surfaced cleanly if the user clicks Pay with PayHere
+    });
+
     return () => {
       cancelled = true;
     };
   }, [isOpen, liveUsdRates]);
 
+  const pricing = useMemo(() => calculatePayHereCheckoutPricing(priceInfo), [priceInfo]);
+
   if (!isOpen) return null;
 
   const formattedLocalPrice = priceInfo?.formattedLocalPrice || `LKR ${PRO_BASE_PRICE_LKR} / month`;
   const effectiveEmail = (userEmail || receiptEmailInput).trim().toLowerCase();
+  const isBusy = isLaunchingPayHere || isActivatingPro || isRedeeming;
 
-  const handleCardNumberChange = (val: string) => {
-    const digits = val.replace(/\D/g, '').slice(0, 16);
-    const grouped = digits.replace(/(\d{4})(?=\d)/g, '$1 ');
-    setCardLastFourInput(grouped);
-    if (paymentError) setPaymentError(null);
-  };
-
-  const handleExpiryChange = (val: string) => {
-    const digits = val.replace(/\D/g, '').slice(0, 4);
-    const formatted = digits.length > 2 ? `${digits.slice(0, 2)}/${digits.slice(2)}` : digits;
-    setCardExpiry(formatted);
-    if (paymentError) setPaymentError(null);
-  };
-
-  const handlePaymentSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleStartPayHerePayment = async () => {
     setPaymentError(null);
+    setPaymentNotice(null);
 
-    if (!effectiveEmail || !effectiveEmail.includes('@')) {
-      setPaymentError('Please enter a valid email address for your activation receipt.');
+    if (!isSignedIn || !userUid) {
+      setPaymentError('Please sign in with your verified account before checking out with PayHere so your 30-day Pro plan syncs immediately.');
       return;
     }
 
-    if (paymentMethod === 'card') {
-      const digits = cardLastFourInput.replace(/\D/g, '');
-      if (cardHolder.trim().length < 2) {
-        setPaymentError('Please enter the cardholder name.');
-        return;
-      }
-      if (digits.length < 12) {
-        setPaymentError('Please enter a valid card number.');
-        return;
-      }
-      if (cardExpiry.length < 5 || cardCvc.replace(/\D/g, '').length < 3) {
-        setPaymentError('Please enter a valid expiry date (MM/YY) and CVC.');
-        return;
-      }
+    if (!effectiveEmail || !effectiveEmail.includes('@')) {
+      setPaymentError('A valid email address is required for PayHere Checkout and your Pro receipt.');
+      return;
     }
 
-    setIsProcessingPayment(true);
+    setIsLaunchingPayHere(true);
     try {
-      // Never persist or transmit raw card PAN/CVC anywhere; clear sensitive form inputs immediately
-      setCardLastFourInput('');
-      setCardCvc('');
-      setCardExpiry('');
-      await new Promise((r) => window.setTimeout(r, 700));
-      await onCompleteActivation({
-        method: 'payment',
-        localPriceDisplay: formattedLocalPrice,
-        receiptEmail: effectiveEmail,
+      await startPayHereCheckout({
+        uid: userUid,
+        email: effectiveEmail,
+        displayName: userDisplayName || effectiveEmail.split('@')[0] || 'Neon Member',
+        priceInfo,
+        onCompleted: async (orderId, usedPricing) => {
+          setIsLaunchingPayHere(false);
+          setIsActivatingPro(true);
+          const gatewayLabel = PAYHERE_CONFIG.sandbox ? 'PayHere Sandbox' : 'PayHere';
+          const amountPaidDisplay = `${usedPricing.formattedChargeTotal} (incl. fee · ${gatewayLabel})`;
+          try {
+            await onCompleteActivation({
+              method: 'payment',
+              paymentMethod: getPayHerePaymentMethodTag(),
+              orderId,
+              amountPaidDisplay,
+              localPriceDisplay: `${usedPricing.formattedLocalTotal} / 30 days`,
+              receiptEmail: effectiveEmail,
+            });
+          } catch (err) {
+            setPaymentError(
+              err instanceof Error
+                ? err.message
+                : 'Payment completed, but upgrading your profile failed. Please refresh the page.'
+            );
+          } finally {
+            setIsActivatingPro(false);
+          }
+        },
+        onDismissed: () => {
+          setIsLaunchingPayHere(false);
+          setIsActivatingPro(false);
+          setPaymentNotice('PayHere payment window was closed before completion. You can try again anytime.');
+        },
+        onError: (errMsg) => {
+          setIsLaunchingPayHere(false);
+          setIsActivatingPro(false);
+          setPaymentError(errMsg);
+        },
       });
     } catch (err) {
-      setPaymentError(err instanceof Error ? err.message : 'Payment could not be processed.');
-    } finally {
-      setIsProcessingPayment(false);
+      setIsLaunchingPayHere(false);
+      setIsActivatingPro(false);
+      setPaymentError(
+        err instanceof Error
+          ? err.message
+          : 'Unable to initialize PayHere Checkout. Please try again.'
+      );
     }
   };
 
@@ -154,6 +188,8 @@ export const UpgradeProModal: React.FC<UpgradeProModalProps> = ({
     try {
       await onCompleteActivation({
         method: 'redeem',
+        paymentMethod: 'redeem',
+        orderId: null,
         localPriceDisplay: formattedLocalPrice,
         receiptEmail: emailToUse,
       });
@@ -184,9 +220,16 @@ export const UpgradeProModal: React.FC<UpgradeProModalProps> = ({
             <X className="h-4 w-4" />
           </button>
 
-          <div className="inline-flex items-center gap-1.5 rounded-full border border-amber-400/40 bg-amber-500/15 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-amber-300">
-            <Crown className="h-3.5 w-3.5" />
-            Neon Pro · 30-Day Full Access
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex items-center gap-1.5 rounded-full border border-amber-400/40 bg-amber-500/15 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-amber-300">
+              <Crown className="h-3.5 w-3.5" />
+              Neon Pro · 30-Day Full Access
+            </div>
+            {PAYHERE_CONFIG.sandbox && (
+              <span className="inline-flex items-center rounded-full border border-cyan-400/35 bg-cyan-500/15 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-cyan-200">
+                PayHere Sandbox
+              </span>
+            )}
           </div>
 
           <h2 className="mt-3 text-2xl font-black tracking-tight text-white">
@@ -196,7 +239,7 @@ export const UpgradeProModal: React.FC<UpgradeProModalProps> = ({
             <p className="mt-1 text-xs font-medium text-cyan-200">{reason}</p>
           ) : (
             <p className="mt-1 text-xs text-slate-300">
-              Unlock every country clock, Live TV channel, radio station, entertainment stream &amp; movie.
+              Unlock all 215 countries, every country Live TV &amp; Radio station, Entertainment categories &amp; Movies.
             </p>
           )}
 
@@ -205,7 +248,9 @@ export const UpgradeProModal: React.FC<UpgradeProModalProps> = ({
             <div>
               <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-cyan-300">
                 <Globe2 className="h-3.5 w-3.5" />
-                {priceInfo ? `Detected: ${priceInfo.countryName} (${priceInfo.currencyCode})` : 'Detecting local currency...'}
+                {priceInfo
+                  ? `Detected: ${priceInfo.countryName} (${priceInfo.currencyCode})`
+                  : 'Detecting local currency...'}
               </div>
               <div className="mt-1 text-2xl font-black text-white sm:text-3xl">
                 {formattedLocalPrice}
@@ -223,13 +268,13 @@ export const UpgradeProModal: React.FC<UpgradeProModalProps> = ({
           </div>
         </div>
 
-        <div className="max-h-[70vh] overflow-y-auto px-6 py-5 space-y-5">
+        <div className="max-h-[70vh] space-y-5 overflow-y-auto px-6 py-5">
           {/* Pro Benefits */}
           <div className="grid grid-cols-2 gap-2 text-xs">
             {[
               { icon: Globe2, label: 'All 215 World Clocks' },
-              { icon: Tv, label: 'All Live TV & ITN Channels' },
-              { icon: Sparkles, label: 'All 10,000+ Entertainment' },
+              { icon: Tv, label: 'All Country Live TV' },
+              { icon: Sparkles, label: 'All Entertainment Categories' },
               { icon: CheckCircle2, label: 'All Radio & Ad-Free Movies' },
             ].map((item) => (
               <div
@@ -243,8 +288,8 @@ export const UpgradeProModal: React.FC<UpgradeProModalProps> = ({
           </div>
 
           {!isSignedIn && (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-sky-400/30 bg-sky-500/10 px-3.5 py-2.5 text-xs text-sky-100">
-              <span>Sign in to sync your 30-day Pro plan across all your devices.</span>
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-sky-400/35 bg-sky-500/12 px-3.5 py-2.5 text-xs text-sky-100">
+              <span>Sign in to your verified account to pay via PayHere and sync Pro across devices.</span>
               {onOpenAuth && (
                 <button
                   type="button"
@@ -252,7 +297,7 @@ export const UpgradeProModal: React.FC<UpgradeProModalProps> = ({
                     onClose();
                     onOpenAuth();
                   }}
-                  className="rounded-lg bg-sky-400 px-2.5 py-1 text-[11px] font-bold text-slate-950 hover:bg-sky-300"
+                  className="rounded-lg bg-sky-400 px-3 py-1.5 text-[11px] font-bold text-slate-950 hover:bg-sky-300"
                 >
                   Sign In
                 </button>
@@ -260,38 +305,55 @@ export const UpgradeProModal: React.FC<UpgradeProModalProps> = ({
             </div>
           )}
 
-          {/* Interactive Checkout / Payment Gateway */}
-          <form onSubmit={handlePaymentSubmit} className="space-y-3.5 rounded-2xl border border-white/10 bg-slate-900/60 p-4">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                Express Checkout
-              </span>
-              <div className="flex gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setPaymentMethod('card')}
-                  className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-semibold transition ${
-                    paymentMethod === 'card'
-                      ? 'bg-cyan-500/20 text-cyan-200 border border-cyan-400/50'
-                      : 'border border-white/10 bg-slate-950/70 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  <CreditCard className="h-3 w-3" />
-                  Card
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPaymentMethod('wallet')}
-                  className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] font-semibold transition ${
-                    paymentMethod === 'wallet'
-                      ? 'bg-cyan-500/20 text-cyan-200 border border-cyan-400/50'
-                      : 'border border-white/10 bg-slate-950/70 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  <Wallet className="h-3 w-3" />
-                  Local / Pay Wallet
-                </button>
+          {/* PayHere Checkout Panel */}
+          <div className="space-y-3.5 rounded-2xl border border-cyan-400/25 bg-slate-900/70 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <CreditCard className="h-4 w-4 text-cyan-300" />
+                <span className="text-xs font-bold uppercase tracking-wider text-white">
+                  PayHere Checkout
+                </span>
               </div>
+              <span className="rounded-md border border-white/10 bg-slate-950/80 px-2 py-0.5 font-mono text-[10px] text-slate-400">
+                {PAYHERE_CONFIG.sandbox ? 'SANDBOX' : 'LIVE'} · ID {PAYHERE_CONFIG.merchantId}
+              </span>
+            </div>
+
+            {/* Transparent Pass-Through Fee Breakdown */}
+            <div className="space-y-1.5 rounded-xl border border-white/10 bg-slate-950/80 p-3 text-xs">
+              <div className="flex items-center justify-between text-slate-300">
+                <span>Neon Pro Base Plan (30 Days)</span>
+                <span className="font-mono font-semibold text-white">
+                  LKR {pricing.baseLkr.toFixed(2)}
+                  {!priceInfo?.isSriLanka && priceInfo && (
+                    <span className="ml-1.5 text-[11px] text-slate-400">
+                      (≈ {pricing.formattedLocalBase})
+                    </span>
+                  )}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-slate-400">
+                <span>Gateway Convenience Fee ({pricing.feeRatePercent}%)</span>
+                <span className="font-mono text-slate-300">
+                  LKR {pricing.feeLkr.toFixed(2)}
+                  {!priceInfo?.isSriLanka && priceInfo && (
+                    <span className="ml-1.5 text-[11px] text-slate-500">
+                      (≈ {pricing.formattedLocalFee})
+                    </span>
+                  )}
+                </span>
+              </div>
+              <div className="flex items-center justify-between border-t border-white/10 pt-2 text-sm font-extrabold text-white">
+                <span>Total Charged via PayHere</span>
+                <span className="font-mono text-cyan-300">
+                  {pricing.formattedChargeTotal}
+                </span>
+              </div>
+              {!priceInfo?.isSriLanka && priceInfo && pricing.isChargedInLkr && (
+                <p className="text-[11px] text-slate-400">
+                  Approx. {pricing.formattedLocalTotal} in {priceInfo.currencyCode} · Billed in LKR via PayHere.
+                </p>
+              )}
             </div>
 
             {!userEmail && (
@@ -301,7 +363,6 @@ export const UpgradeProModal: React.FC<UpgradeProModalProps> = ({
                 </label>
                 <input
                   type="email"
-                  required
                   value={receiptEmailInput}
                   onChange={(e) => setReceiptEmailInput(e.target.value)}
                   placeholder="you@example.com"
@@ -310,51 +371,23 @@ export const UpgradeProModal: React.FC<UpgradeProModalProps> = ({
               </div>
             )}
 
-            {paymentMethod === 'card' ? (
-              <div className="space-y-2.5">
-                <input
-                  type="text"
-                  value={cardHolder}
-                  onChange={(e) => setCardHolder(e.target.value)}
-                  placeholder="Cardholder Name"
-                  autoComplete="cc-name"
-                  className="w-full rounded-xl border border-white/15 bg-slate-950/90 px-3 py-2 text-xs text-white placeholder:text-slate-500 focus:border-cyan-400/60 focus:outline-none"
-                />
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={cardLastFourInput}
-                  onChange={(e) => handleCardNumberChange(e.target.value)}
-                  placeholder="Card Number (Visa / Mastercard)"
-                  autoComplete="cc-number"
-                  className="w-full rounded-xl border border-white/15 bg-slate-950/90 px-3 py-2 font-mono text-xs text-white placeholder:text-slate-500 focus:border-cyan-400/60 focus:outline-none"
-                />
-                <div className="grid grid-cols-2 gap-2.5">
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    value={cardExpiry}
-                    onChange={(e) => handleExpiryChange(e.target.value)}
-                    placeholder="MM/YY"
-                    autoComplete="cc-exp"
-                    className="rounded-xl border border-white/15 bg-slate-950/90 px-3 py-2 font-mono text-xs text-white placeholder:text-slate-500 focus:border-cyan-400/60 focus:outline-none"
-                  />
-                  <input
-                    type="password"
-                    inputMode="numeric"
-                    maxLength={4}
-                    value={cardCvc}
-                    onChange={(e) => setCardCvc(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                    placeholder="CVC"
-                    autoComplete="cc-csc"
-                    className="rounded-xl border border-white/15 bg-slate-950/90 px-3 py-2 font-mono text-xs text-white placeholder:text-slate-500 focus:border-cyan-400/60 focus:outline-none"
-                  />
-                </div>
-              </div>
-            ) : (
-              <div className="rounded-xl border border-cyan-400/20 bg-slate-950/80 p-3 text-xs text-slate-300">
-                Instant 1-click checkout via Sri Lanka PayHere / FriMi / Apple Pay / Google Pay for{' '}
-                <strong className="text-cyan-300">{formattedLocalPrice}</strong>.
+            <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-semibold text-slate-400">
+              {['Visa', 'Mastercard', 'Amex', 'FriMi', 'eZ Cash', 'mCash', 'Genie', 'HelaPay'].map(
+                (methodLabel) => (
+                  <span
+                    key={methodLabel}
+                    className="rounded-md border border-white/10 bg-slate-950/75 px-2 py-0.5 text-slate-300"
+                  >
+                    {methodLabel}
+                  </span>
+                )
+              )}
+            </div>
+
+            {paymentNotice && (
+              <div className="flex items-start gap-2 rounded-xl border border-amber-400/35 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
+                <span>{paymentNotice}</span>
               </div>
             )}
 
@@ -364,29 +397,49 @@ export const UpgradeProModal: React.FC<UpgradeProModalProps> = ({
               </p>
             )}
 
-            <button
-              type="submit"
-              disabled={isProcessingPayment || isRedeeming}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-400 via-sky-500 to-fuchsia-500 px-4 py-3 text-xs font-extrabold uppercase tracking-wider text-slate-950 shadow-[0_0_26px_rgba(34,211,238,0.4)] transition hover:brightness-110 disabled:opacity-60"
-            >
-              {isProcessingPayment ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Activating Neon Pro...
-                </>
-              ) : (
-                <>
-                  <ShieldCheck className="h-4 w-4" />
-                  Pay {formattedLocalPrice} &amp; Unlock Pro
-                </>
-              )}
-            </button>
+            {isSignedIn && userUid ? (
+              <button
+                type="button"
+                onClick={() => void handleStartPayHerePayment()}
+                disabled={isBusy}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-400 via-sky-500 to-fuchsia-500 px-4 py-3 text-xs font-extrabold uppercase tracking-wider text-slate-950 shadow-[0_0_26px_rgba(34,211,238,0.4)] transition hover:brightness-110 disabled:opacity-60"
+              >
+                {isActivatingPro ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Activating Neon Pro...
+                  </>
+                ) : isLaunchingPayHere ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Opening PayHere Checkout...
+                  </>
+                ) : (
+                  <>
+                    <ShieldCheck className="h-4 w-4" />
+                    Pay {pricing.formattedChargeTotal} via PayHere
+                  </>
+                )}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenAuth?.();
+                }}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-400 via-sky-500 to-fuchsia-500 px-4 py-3 text-xs font-extrabold uppercase tracking-wider text-slate-950 shadow-[0_0_26px_rgba(34,211,238,0.4)] transition hover:brightness-110"
+              >
+                <ShieldCheck className="h-4 w-4" />
+                Sign In to Pay {pricing.formattedChargeTotal} via PayHere
+              </button>
+            )}
 
             <div className="flex items-center justify-center gap-1.5 text-[10px] text-slate-500">
               <Lock className="h-3 w-3" />
-              Encrypted checkout · Instant email receipt · No raw card details stored
+              Secure PayHere Checkout · Instant Pro unlock &amp; receipt · No card data stored here
             </div>
-          </form>
+          </div>
 
           {/* Redeem Code Section */}
           <form
@@ -413,7 +466,7 @@ export const UpgradeProModal: React.FC<UpgradeProModalProps> = ({
               />
               <button
                 type="submit"
-                disabled={isRedeeming || isProcessingPayment}
+                disabled={isBusy}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-fuchsia-500 to-cyan-400 px-4 py-2 text-xs font-extrabold text-slate-950 shadow-[0_0_18px_rgba(232,121,249,0.35)] transition hover:brightness-110 disabled:opacity-60"
               >
                 {isRedeeming ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Redeem'}

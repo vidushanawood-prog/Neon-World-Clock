@@ -404,9 +404,17 @@ export const SecretAdminDashboard: React.FC<SecretAdminDashboardProps> = ({
                         <span>
                           Method:{' '}
                           <strong className="text-slate-200 uppercase">
-                            {u.activationMethod || 'none'}
+                            {u.paymentMethod && u.paymentMethod !== 'none'
+                              ? u.paymentMethod
+                              : u.activationMethod || 'none'}
                           </strong>
                         </span>
+                        {u.lastOrderId && (
+                          <span>
+                            Order:{' '}
+                            <strong className="font-mono text-fuchsia-300">{u.lastOrderId}</strong>
+                          </span>
+                        )}
                         {proNow && u.proExpiresAt && (
                           <span>
                             Expires:{' '}

@@ -76,6 +76,8 @@ service cloud.firestore {
           'proActivatedAt',
           'proExpiresAt',
           'activationMethod',
+          'paymentMethod',
+          'lastOrderId',
           'isBanned',
           'celebrationShown',
           'createdAt',
@@ -98,6 +100,8 @@ service cloud.firestore {
         isValidEpochMsOrNull(data.proExpiresAt) &&
         data.activationMethod is string &&
         data.activationMethod in ['none', 'payment', 'redeem', 'admin'] &&
+        (!('paymentMethod' in data) || (data.paymentMethod is string && data.paymentMethod in ['none', 'payhere_sandbox', 'payhere_live', 'redeem', 'admin'])) &&
+        (!('lastOrderId' in data) || data.lastOrderId == null || (data.lastOrderId is string && isValidId(data.lastOrderId))) &&
         data.isBanned is bool &&
         data.celebrationShown is bool &&
         data.createdAt is timestamp &&
@@ -241,6 +245,8 @@ service cloud.firestore {
         incoming().proActivatedAt == null &&
         incoming().proExpiresAt == null &&
         incoming().activationMethod == 'none' &&
+        (!('paymentMethod' in incoming()) || incoming().paymentMethod == 'none') &&
+        (!('lastOrderId' in incoming()) || incoming().lastOrderId == null) &&
         incoming().isBanned == false &&
         incoming().celebrationShown == true &&
         incoming().createdAt == request.time &&
@@ -262,6 +268,8 @@ service cloud.firestore {
               'proActivatedAt',
               'proExpiresAt',
               'activationMethod',
+              'paymentMethod',
+              'lastOrderId',
               'isBanned',
               'celebrationShown',
               'updatedAt'
@@ -302,15 +310,21 @@ service cloud.firestore {
                   'proActivatedAt',
                   'proExpiresAt',
                   'activationMethod',
+                  'paymentMethod',
+                  'lastOrderId',
                   'isBanned',
                   'celebrationShown',
                   'updatedAt'
                 ])
               ) ||
-              // 2c: Owner Pro activation via Payment or Redeem Code (strictly capped at 31 days max)
+              // 2c: Owner Pro activation via PayHere Payment or Redeem Code (strictly capped at 31 days max)
               (
                 incoming().plan == 'pro' &&
                 incoming().activationMethod in ['payment', 'redeem'] &&
+                (!('paymentMethod' in incoming()) || (
+                  (incoming().activationMethod == 'payment' && incoming().paymentMethod in ['payhere_sandbox', 'payhere_live']) ||
+                  (incoming().activationMethod == 'redeem' && incoming().paymentMethod == 'redeem')
+                )) &&
                 incoming().proActivatedAt is int &&
                 incoming().proExpiresAt is int &&
                 incoming().proExpiresAt > incoming().proActivatedAt &&
@@ -321,6 +335,8 @@ service cloud.firestore {
                   'proActivatedAt',
                   'proExpiresAt',
                   'activationMethod',
+                  'paymentMethod',
+                  'lastOrderId',
                   'isBanned',
                   'celebrationShown',
                   'updatedAt'

@@ -59,6 +59,7 @@ export function buildReceiptContent(params: {
   activatedAtMs: number;
   expiresAtMs: number;
   localPriceDisplay?: string;
+  amountPaidOverride?: string;
 }): {
   subject: string;
   planName: string;
@@ -71,11 +72,13 @@ export function buildReceiptContent(params: {
   const subject = 'Your Neon World Clock Pro Plan is Activated!';
   const planName = 'Neon World Clock Pro (30 Days)';
   const amountPaid =
-    params.activationMethod === 'redeem'
-      ? `LKR 0.00 - Redeem Code Applied (Value: LKR ${PRO_BASE_PRICE_LKR}.00)`
-      : params.activationMethod === 'admin'
-        ? `LKR 0.00 - Admin Grant (Value: LKR ${PRO_BASE_PRICE_LKR}.00)`
-        : `LKR ${PRO_BASE_PRICE_LKR}.00`;
+    params.amountPaidOverride && params.amountPaidOverride.trim().length > 0
+      ? params.amountPaidOverride.trim().slice(0, 80)
+      : params.activationMethod === 'redeem'
+        ? `LKR 0.00 - Redeem Code Applied (Value: LKR ${PRO_BASE_PRICE_LKR}.00)`
+        : params.activationMethod === 'admin'
+          ? `LKR 0.00 - Admin Grant (Value: LKR ${PRO_BASE_PRICE_LKR}.00)`
+          : `LKR ${PRO_BASE_PRICE_LKR}.00`;
 
   const activationDate = formatReceiptDateTime(params.activatedAtMs);
   const expiryDate = formatReceiptDateTime(params.expiresAtMs);
@@ -165,8 +168,15 @@ export async function sendProActivationReceipt(params: {
   activatedAtMs: number;
   expiresAtMs: number;
   localPriceDisplay?: string;
+  orderId?: string | null;
+  amountPaidOverride?: string;
 }): Promise<ProActivationReceipt> {
-  const transactionId = generateTransactionId(params.activationMethod);
+  const cleanedOrderId =
+    typeof params.orderId === 'string'
+      ? params.orderId.trim().replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128)
+      : '';
+  const transactionId =
+    cleanedOrderId.length >= 4 ? cleanedOrderId : generateTransactionId(params.activationMethod);
   const content = buildReceiptContent({
     transactionId,
     userEmail: params.userEmail,
@@ -175,6 +185,7 @@ export async function sendProActivationReceipt(params: {
     activatedAtMs: params.activatedAtMs,
     expiresAtMs: params.expiresAtMs,
     localPriceDisplay: params.localPriceDisplay,
+    amountPaidOverride: params.amountPaidOverride,
   });
 
   let emailJsDispatched = false;

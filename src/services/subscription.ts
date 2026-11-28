@@ -1,4 +1,4 @@
-import type { ActivationMethod, FirestoreUserProfile } from '../lib/firebase';
+import type { ActivationMethod, FirestoreUserProfile, PaymentMethodType } from '../lib/firebase';
 
 export const FREE_LIMITS = {
   COUNTRIES: 100,
@@ -37,6 +37,8 @@ export interface LocalGuestSubscription {
   proActivatedAt: number | null;
   proExpiresAt: number | null;
   activationMethod: ActivationMethod;
+  paymentMethod?: PaymentMethodType;
+  lastOrderId?: string | null;
 }
 
 const GUEST_SUB_KEY = 'neon_world_clock_guest_sub_v1';
@@ -45,7 +47,14 @@ export function readGuestSubscription(): LocalGuestSubscription {
   try {
     const raw = localStorage.getItem(GUEST_SUB_KEY);
     if (!raw) {
-      return { plan: 'free', proActivatedAt: null, proExpiresAt: null, activationMethod: 'none' };
+      return {
+        plan: 'free',
+        proActivatedAt: null,
+        proExpiresAt: null,
+        activationMethod: 'none',
+        paymentMethod: 'none',
+        lastOrderId: null,
+      };
     }
     const parsed = JSON.parse(raw) as Partial<LocalGuestSubscription>;
     const proExpiresAt = typeof parsed.proExpiresAt === 'number' ? parsed.proExpiresAt : null;
@@ -58,6 +67,14 @@ export function readGuestSubscription(): LocalGuestSubscription {
           parsed.activationMethod === 'payment' || parsed.activationMethod === 'redeem'
             ? parsed.activationMethod
             : 'payment',
+        paymentMethod:
+          parsed.paymentMethod === 'payhere_sandbox' ||
+          parsed.paymentMethod === 'payhere_live' ||
+          parsed.paymentMethod === 'redeem' ||
+          parsed.paymentMethod === 'admin'
+            ? parsed.paymentMethod
+            : 'none',
+        lastOrderId: typeof parsed.lastOrderId === 'string' ? parsed.lastOrderId : null,
       };
     }
     // Expired guest Pro — clean up
@@ -65,12 +82,23 @@ export function readGuestSubscription(): LocalGuestSubscription {
   } catch {
     // ignore storage errors
   }
-  return { plan: 'free', proActivatedAt: null, proExpiresAt: null, activationMethod: 'none' };
+  return {
+    plan: 'free',
+    proActivatedAt: null,
+    proExpiresAt: null,
+    activationMethod: 'none',
+    paymentMethod: 'none',
+    lastOrderId: null,
+  };
 }
 
 export function saveGuestProSubscription(
   method: 'payment' | 'redeem',
-  durationMs: number = PRO_DURATION_MS
+  durationMs: number = PRO_DURATION_MS,
+  options?: {
+    paymentMethod?: PaymentMethodType;
+    lastOrderId?: string | null;
+  }
 ): LocalGuestSubscription {
   const now = Date.now();
   const next: LocalGuestSubscription = {
@@ -78,6 +106,8 @@ export function saveGuestProSubscription(
     proActivatedAt: now,
     proExpiresAt: now + durationMs,
     activationMethod: method,
+    paymentMethod: options?.paymentMethod || (method === 'redeem' ? 'redeem' : 'payhere_sandbox'),
+    lastOrderId: options?.lastOrderId ?? null,
   };
   try {
     localStorage.setItem(GUEST_SUB_KEY, JSON.stringify(next));

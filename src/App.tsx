@@ -61,6 +61,7 @@ import {
   subscribeToUserProfile,
   syncVerifiedUserProfile,
   type FirestoreUserProfile,
+  type PaymentMethodType,
 } from './lib/firebase';
 import {
   clearActiveSession,
@@ -608,31 +609,71 @@ export default function App() {
     return () => window.clearInterval(id);
   }, [firebaseUser?.uid, userProfile, route]);
 
-  // Complete Pro activation (via Payment Gateway or Redeem Code "Vidusha5621") + Automated Email Receipt + Celebration
+  // Complete Pro activation (via PayHere Sandbox/Live or Redeem Code "Vidusha5621") + Automated Email Receipt + Celebration
   const handleCompleteProActivation = useCallback(
     async ({
       method,
+      paymentMethod,
+      orderId,
+      amountPaidDisplay,
       localPriceDisplay,
       receiptEmail,
     }: {
       method: 'payment' | 'redeem';
+      paymentMethod?: PaymentMethodType;
+      orderId?: string | null;
+      amountPaidDisplay?: string;
       localPriceDisplay: string;
       receiptEmail: string;
     }) => {
       let activatedAtMs = Date.now();
       let expiresAtMs = activatedAtMs + PRO_DURATION_MS;
+      const resolvedPaymentMethod: PaymentMethodType =
+        paymentMethod || (method === 'redeem' ? 'redeem' : 'payhere_sandbox');
+      let persistedOrderId: string | null = orderId ?? null;
 
       if (firebaseUser?.uid && firebaseUser.emailVerified) {
-        const res = await activateUserPro(firebaseUser.uid, method, PRO_DURATION_MS);
+        const res = await activateUserPro(firebaseUser.uid, method, PRO_DURATION_MS, {
+          paymentMethod: resolvedPaymentMethod,
+          lastOrderId: orderId ?? null,
+        });
         activatedAtMs = res.proActivatedAt;
         expiresAtMs = res.proExpiresAt;
+        persistedOrderId = res.lastOrderId;
+
+        // Immediately reflect Pro state locally so all countries, Live TV, Radio & categories unlock instantaneously
+        setUserProfile((prev) => ({
+          uid: firebaseUser.uid,
+          email: (prev?.email || firebaseUser.email || receiptEmail).toLowerCase(),
+          displayName:
+            prev?.displayName ||
+            authSession?.displayName ||
+            firebaseUser.displayName ||
+            'Neon Pro Member',
+          emailVerified: true,
+          plan: 'pro',
+          proActivatedAt: activatedAtMs,
+          proExpiresAt: expiresAtMs,
+          activationMethod: method,
+          paymentMethod: res.paymentMethod,
+          lastOrderId: res.lastOrderId,
+          isBanned: false,
+          celebrationShown: false,
+          createdAt: prev?.createdAt ?? null,
+          updatedAt: prev?.updatedAt ?? null,
+        }));
+
+        // Guard against duplicate celebration from the concurrent onSnapshot event
         celebrationTriggerLockRef.current = `${firebaseUser.uid}:${activatedAtMs}`;
-        void markUserCelebrationShown(firebaseUser.uid).catch(() => {});
       } else {
-        const updatedGuest = saveGuestProSubscription(method, PRO_DURATION_MS);
+        const updatedGuest = saveGuestProSubscription(method, PRO_DURATION_MS, {
+          paymentMethod: resolvedPaymentMethod,
+          lastOrderId: orderId ?? null,
+        });
         setGuestSub(updatedGuest);
         activatedAtMs = updatedGuest.proActivatedAt || activatedAtMs;
         expiresAtMs = updatedGuest.proExpiresAt || expiresAtMs;
+        persistedOrderId = updatedGuest.lastOrderId ?? persistedOrderId;
       }
 
       const receipt = await sendProActivationReceipt({
@@ -647,6 +688,8 @@ export default function App() {
         activatedAtMs,
         expiresAtMs,
         localPriceDisplay,
+        orderId: persistedOrderId,
+        amountPaidOverride: amountPaidDisplay,
       });
 
       setLastReceipt(receipt);
@@ -2917,11 +2960,18 @@ export default function App() {
         }}
       />
 
-      {/* Upgrade to Neon Pro Modal (Auto Currency Detection + Checkout + Redeem Code) */}
+      {/* Upgrade to Neon Pro Modal (PayHere Sandbox/Live Checkout + Auto Currency + Redeem Code) */}
       <UpgradeProModal
         isOpen={upgradeModalState.open}
         reason={upgradeModalState.reason}
         liveUsdRates={fxState.rates}
+        userUid={firebaseUser?.uid || null}
+        userDisplayName={
+          userProfile?.displayName ||
+          authSession?.displayName ||
+          firebaseUser?.displayName ||
+          ''
+        }
         userEmail={firebaseUser?.email || authSession?.email || null}
         isSignedIn={Boolean(firebaseUser && firebaseUser.emailVerified)}
         onClose={() => setUpgradeModalState({ open: false, reason: null })}
@@ -2939,7 +2989,12 @@ export default function App() {
       <NeonFireCelebration
         isOpen={showCelebration}
         receipt={lastReceipt}
-        onClose={() => setShowCelebration(false)}
+        onClose={() => {
+          setShowCelebration(false);
+          if (firebaseUser?.uid && firebaseUser.emailVerified && userProfile?.celebrationShown === false) {
+            void markUserCelebrationShown(firebaseUser.uid).catch(() => {});
+          }
+        }}
         onViewReceipt={() => {
           if (lastReceipt) setActiveReceiptModal(lastReceipt);
         }}

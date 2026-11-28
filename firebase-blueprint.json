@@ -47,6 +47,18 @@
           "enum": ["none", "payment", "redeem", "admin"],
           "description": "How the current Pro plan was activated."
         },
+        "paymentMethod": {
+          "type": "string",
+          "enum": ["none", "payhere_sandbox", "payhere_live", "redeem", "admin"],
+          "description": "Payment gateway or activation provider identifier for the latest subscription."
+        },
+        "lastOrderId": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Last PayHere or activation order ID associated with a Pro upgrade, or null."
+        },
         "isBanned": {
           "type": "boolean",
           "description": "Admin moderation flag; when true, user is immediately blocked from the app."
