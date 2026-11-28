@@ -2,7 +2,7 @@
   "entities": {
     "UserProfile": {
       "title": "UserProfile",
-      "description": "Verified Neon World Clock user profile stored at users/{uid}. Never stores plaintext passwords.",
+      "description": "Verified Neon World Clock user profile and Freemium/Pro subscription record stored at users/{uid}. Never stores plaintext passwords or raw payment card data.",
       "type": "object",
       "properties": {
         "uid": {
@@ -29,6 +29,32 @@
           "type": "boolean",
           "description": "Verification status; must be true on verified profile persistence."
         },
+        "plan": {
+          "type": "string",
+          "enum": ["free", "pro"],
+          "description": "Active subscription tier for the user."
+        },
+        "proActivatedAt": {
+          "type": ["integer", "null"],
+          "description": "Unix epoch timestamp in milliseconds when Pro plan was activated, or null."
+        },
+        "proExpiresAt": {
+          "type": ["integer", "null"],
+          "description": "Unix epoch timestamp in milliseconds when 30-day Pro access expires, or null."
+        },
+        "activationMethod": {
+          "type": "string",
+          "enum": ["none", "payment", "redeem", "admin"],
+          "description": "How the current Pro plan was activated."
+        },
+        "isBanned": {
+          "type": "boolean",
+          "description": "Admin moderation flag; when true, user is immediately blocked from the app."
+        },
+        "celebrationShown": {
+          "type": "boolean",
+          "description": "Tracks whether the Neon Fire Pro Activation Celebration has played for the latest Pro activation."
+        },
         "createdAt": {
           "type": "string",
           "format": "date-time",
@@ -40,7 +66,19 @@
           "description": "Firestore server timestamp recorded when the profile was last updated."
         }
       },
-      "required": ["uid", "email", "displayName", "emailVerified", "createdAt"]
+      "required": [
+        "uid",
+        "email",
+        "displayName",
+        "emailVerified",
+        "plan",
+        "proActivatedAt",
+        "proExpiresAt",
+        "activationMethod",
+        "isBanned",
+        "celebrationShown",
+        "createdAt"
+      ]
     },
     "WatchlistMovie": {
       "title": "WatchlistMovie",
@@ -109,6 +147,101 @@
         "overview",
         "addedAt"
       ]
+    },
+    "ReceiptEmail": {
+      "title": "ReceiptEmail",
+      "description": "Immutable Pro activation receipt queued for Firebase Trigger Email extension at mail/{mailId}.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the user who received the receipt."
+        },
+        "to": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 254,
+          "description": "Recipient email address."
+        },
+        "transactionId": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique transaction ID matching the document ID."
+        },
+        "planName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Activated plan name (Neon World Clock Pro (30 Days))."
+        },
+        "amountPaid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Formatted payment amount or redeem code note."
+        },
+        "activationMethod": {
+          "type": "string",
+          "enum": ["payment", "redeem", "admin"],
+          "description": "How Pro was activated."
+        },
+        "activationDate": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 60,
+          "description": "Formatted UTC/local activation timestamp."
+        },
+        "expiryDate": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 60,
+          "description": "Formatted expiry date (+30 days)."
+        },
+        "message": {
+          "type": "object",
+          "properties": {
+            "subject": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000
+            },
+            "html": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 12000
+            }
+          },
+          "required": ["subject", "text", "html"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable Firestore server timestamp when the receipt was queued."
+        }
+      },
+      "required": [
+        "uid",
+        "to",
+        "transactionId",
+        "planName",
+        "amountPaid",
+        "activationMethod",
+        "activationDate",
+        "expiryDate",
+        "message",
+        "createdAt"
+      ]
     }
   },
   "firestore": {
@@ -116,13 +249,19 @@
       "schema": {
         "$ref": "#/entities/UserProfile"
       },
-      "description": "Verified user profile documents isolated strictly to the owning authenticated user."
+      "description": "Verified user profile and subscription documents isolated to the owning user and verified bootstrapped admin."
     },
     "/users/{uid}/watchlist/{movieId}": {
       "schema": {
         "$ref": "#/entities/WatchlistMovie"
       },
       "description": "User's synced My List / Watchlist movies isolated strictly to the owning verified user."
+    },
+    "/mail/{mailId}": {
+      "schema": {
+        "$ref": "#/entities/ReceiptEmail"
+      },
+      "description": "Create-only immutable receipt email records for Firebase Trigger Email extension."
     }
   }
 }

@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Cloud,
   Film,
+  Lock,
   Play,
   Plus,
   RefreshCw,
@@ -37,6 +38,7 @@ import {
   VERIFIED_OPEN_MOVIES,
 } from '../services/archiveMovies';
 import { watchlistItemToTmdbMovie, type WatchlistItem } from '../services/movieWatchlist';
+import { FREE_LIMITS } from '../services/subscription';
 
 export interface MovieNavigationTarget {
   id?: number;
@@ -47,6 +49,8 @@ interface MoviesPageProps {
   watchlist: WatchlistItem[];
   watchlistIds: Set<number>;
   isCloudSynced: boolean;
+  isProUser?: boolean;
+  onRequireUpgrade?: (reason: string) => void;
   onToggleWatchlist: (movie: TmdbMovie) => Promise<'added' | 'removed'>;
   onOpenMovie: (target: MovieNavigationTarget) => void;
   onOpenAccount: () => void;
@@ -69,13 +73,14 @@ function resolveMovieNavTarget(movie: TmdbMovie): MovieNavigationTarget {
 interface PosterCardProps {
   movie: TmdbMovie;
   inWatchlist: boolean;
-  onOpen: (movie: TmdbMovie) => void;
+  isLocked?: boolean;
+  onOpen: (movie: TmdbMovie, isLocked: boolean) => void;
   onToggleWatchlist: (movie: TmdbMovie) => void;
   layout?: 'row' | 'grid';
 }
 
 const MoviePosterCard: React.FC<PosterCardProps> = React.memo(
-  ({ movie, inWatchlist, onOpen, onToggleWatchlist, layout = 'row' }) => {
+  ({ movie, inWatchlist, isLocked = false, onOpen, onToggleWatchlist, layout = 'row' }) => {
     const [imgFailed, setImgFailed] = useState(false);
     const posterUrl = getPosterUrl(movie.poster_path, 'w342');
     const year = getMovieYear(movie.release_date);
@@ -98,7 +103,7 @@ const MoviePosterCard: React.FC<PosterCardProps> = React.memo(
         <div className="relative aspect-[2/3] w-full overflow-hidden rounded-2xl border border-white/[0.09] bg-[#081226] shadow-md transition-transform duration-200 ease-out will-change-transform group-hover:scale-[1.03] group-hover:border-sky-400/45">
           <button
             type="button"
-            onClick={() => onOpen(movie)}
+            onClick={() => onOpen(movie, isLocked)}
             aria-label={`Open ${movie.title} (${year})`}
             className="block h-full w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
           >
@@ -121,10 +126,22 @@ const MoviePosterCard: React.FC<PosterCardProps> = React.memo(
               </div>
             )}
 
+            {/* Subtle Pro Lock Badge */}
+            {isLocked && (
+              <span className="pointer-events-none absolute top-2.5 left-2.5 z-10 inline-flex items-center gap-1 rounded-lg border border-fuchsia-400/50 bg-slate-950/85 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-fuchsia-200 shadow-[0_0_14px_rgba(232,121,249,0.35)]">
+                <Lock className="h-2.5 w-2.5 text-cyan-300" aria-hidden="true" />
+                Pro
+              </span>
+            )}
+
             {/* Hover Play Scrim */}
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-gradient-to-t from-[#040814]/85 via-[#040814]/20 to-transparent opacity-0 transition-opacity duration-200 group-hover:opacity-100">
               <span className="flex h-11 w-11 items-center justify-center rounded-full bg-sky-500 text-slate-950 shadow-[0_0_24px_rgba(56,189,248,0.65)]">
-                <Play className="ml-0.5 h-5 w-5 fill-current" aria-hidden="true" />
+                {isLocked ? (
+                  <Lock className="h-4.5 w-4.5" aria-hidden="true" />
+                ) : (
+                  <Play className="ml-0.5 h-5 w-5 fill-current" aria-hidden="true" />
+                )}
               </span>
             </div>
           </button>
@@ -159,7 +176,7 @@ const MoviePosterCard: React.FC<PosterCardProps> = React.memo(
         {/* Clean Unboxed Title & Metadata (Zero-Pill Discipline) */}
         <button
           type="button"
-          onClick={() => onOpen(movie)}
+          onClick={() => onOpen(movie, isLocked)}
           className="mt-2.5 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
         >
           <p className="truncate text-xs font-semibold text-white transition-colors group-hover:text-sky-300 sm:text-[13px]">
@@ -195,12 +212,13 @@ interface HorizontalRowProps {
   subtitle?: string;
   movies: TmdbMovie[];
   watchlistIds: Set<number>;
-  onOpenMovie: (movie: TmdbMovie) => void;
+  isMovieLocked: (movie: TmdbMovie, index: number) => boolean;
+  onOpenMovie: (movie: TmdbMovie, isLocked: boolean) => void;
   onToggleWatchlist: (movie: TmdbMovie) => void;
 }
 
 const HorizontalMovieRow: React.FC<HorizontalRowProps> = React.memo(
-  ({ title, subtitle, movies, watchlistIds, onOpenMovie, onToggleWatchlist }) => {
+  ({ title, subtitle, movies, watchlistIds, isMovieLocked, onOpenMovie, onToggleWatchlist }) => {
     const scrollerRef = useRef<HTMLDivElement | null>(null);
 
     const scrollRow = (direction: 'left' | 'right') => {
@@ -249,11 +267,12 @@ const HorizontalMovieRow: React.FC<HorizontalRowProps> = React.memo(
           ref={scrollerRef}
           className="no-scrollbar flex gap-3.5 overflow-x-auto pb-2 scroll-smooth sm:gap-4"
         >
-          {movies.map((movie) => (
+          {movies.map((movie, idx) => (
             <MoviePosterCard
               key={movie.archiveId ? `ia-${movie.archiveId}` : `tmdb-${movie.id}`}
               movie={movie}
               inWatchlist={watchlistIds.has(movie.id)}
+              isLocked={isMovieLocked(movie, idx)}
               onOpen={onOpenMovie}
               onToggleWatchlist={onToggleWatchlist}
               layout="row"
@@ -271,6 +290,8 @@ export const MoviesPage: React.FC<MoviesPageProps> = React.memo(
     watchlist,
     watchlistIds,
     isCloudSynced,
+    isProUser = false,
+    onRequireUpgrade,
     onToggleWatchlist,
     onOpenMovie,
     onOpenAccount,
@@ -288,6 +309,44 @@ export const MoviesPage: React.FC<MoviesPageProps> = React.memo(
       scifiHorror: TmdbMovie[];
       comedyAnimation: TmdbMovie[];
     }>({ classics: [], scifiHorror: [], comedyAnimation: [] });
+
+    // Free plan unlocks the first 4 movies independently in EACH category row
+    const freeMovieCatalogKeys = useMemo(() => {
+      const set = new Set<string>();
+      const addFirstFour = (list: TmdbMovie[]) => {
+        for (const m of list.slice(0, FREE_LIMITS.CATEGORY_ITEMS)) {
+          if (m.archiveId) set.add(`ia:${m.archiveId}`);
+          set.add(`id:${m.id}`);
+        }
+      };
+      addFirstFour(builtInOpenMovies);
+      addFirstFour(archiveRows.classics);
+      addFirstFour(archiveRows.scifiHorror);
+      addFirstFour(archiveRows.comedyAnimation);
+      for (const row of tmdbRows) {
+        addFirstFour(row.movies);
+      }
+      return set;
+    }, [builtInOpenMovies, archiveRows, tmdbRows]);
+
+    const isMovieInFreeCatalog = useCallback(
+      (movie: TmdbMovie) => {
+        if (movie.archiveId && freeMovieCatalogKeys.has(`ia:${movie.archiveId}`)) return true;
+        return freeMovieCatalogKeys.has(`id:${movie.id}`);
+      },
+      [freeMovieCatalogKeys]
+    );
+
+    const isRowIndexLocked = useCallback(
+      (_movie: TmdbMovie, index: number) => !isProUser && index >= FREE_LIMITS.CATEGORY_ITEMS,
+      [isProUser]
+    );
+
+    const isCatalogMovieLocked = useCallback(
+      (movie: TmdbMovie) => !isProUser && !isMovieInFreeCatalog(movie),
+      [isProUser, isMovieInFreeCatalog]
+    );
+
     const [isLoadingHome, setIsLoadingHome] = useState<boolean>(true);
     const [homeError, setHomeError] = useState<string | null>(null);
     const [heroImgFailed, setHeroImgFailed] = useState<boolean>(false);
@@ -550,10 +609,16 @@ export const MoviesPage: React.FC<MoviesPageProps> = React.memo(
     }, []);
 
     const handleOpenMovieCard = useCallback(
-      (movie: TmdbMovie) => {
+      (movie: TmdbMovie, locked: boolean) => {
+        if (locked) {
+          onRequireUpgrade?.(
+            `Unlock "${movie.title}" and the entire ad-free Cinema & TMDB library with Neon Pro (Free plan includes the first ${FREE_LIMITS.CATEGORY_ITEMS} movies per category).`
+          );
+          return;
+        }
         onOpenMovie(resolveMovieNavTarget(movie));
       },
-      [onOpenMovie]
+      [onRequireUpgrade, onOpenMovie]
     );
 
     const handleToggleCardWatchlist = useCallback(
@@ -580,6 +645,7 @@ export const MoviesPage: React.FC<MoviesPageProps> = React.memo(
           featuredMovie.archiveId ||
           findVerifiedOpenMovieByTmdbId(featuredMovie.id))
     );
+    const featuredLocked = featuredMovie ? isCatalogMovieLocked(featuredMovie) : false;
 
     useEffect(() => {
       setHeroImgFailed(false);
@@ -666,11 +732,21 @@ export const MoviesPage: React.FC<MoviesPageProps> = React.memo(
                   <div className="flex flex-wrap items-center gap-3 pt-2">
                     <button
                       type="button"
-                      onClick={() => handleOpenMovieCard(featuredMovie)}
+                      onClick={() => handleOpenMovieCard(featuredMovie, featuredLocked)}
                       className="inline-flex h-11 items-center gap-2 rounded-xl bg-sky-500 px-6 text-sm font-bold text-slate-950 shadow-[0_0_28px_-6px_rgba(56,189,248,0.85)] transition-colors hover:bg-sky-400 whitespace-nowrap"
                     >
-                      <Play className="h-4 w-4 fill-current" aria-hidden="true" />
-                      <span>{featuredIsFreeDirect ? 'Watch Full Movie' : 'Explore & Trailer'}</span>
+                      {featuredLocked ? (
+                        <Lock className="h-4 w-4" aria-hidden="true" />
+                      ) : (
+                        <Play className="h-4 w-4 fill-current" aria-hidden="true" />
+                      )}
+                      <span>
+                        {featuredLocked
+                          ? 'Unlock with Pro'
+                          : featuredIsFreeDirect
+                            ? 'Watch Full Movie'
+                            : 'Explore & Trailer'}
+                      </span>
                     </button>
 
                     <button
@@ -968,6 +1044,7 @@ export const MoviesPage: React.FC<MoviesPageProps> = React.memo(
                     key={movie.archiveId ? `ml-ia-${movie.archiveId}` : `ml-${movie.id}`}
                     movie={movie}
                     inWatchlist={true}
+                    isLocked={isCatalogMovieLocked(movie)}
                     onOpen={handleOpenMovieCard}
                     onToggleWatchlist={handleToggleCardWatchlist}
                     layout="grid"
@@ -1009,11 +1086,12 @@ export const MoviesPage: React.FC<MoviesPageProps> = React.memo(
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-                {filteredFreeFullMovies.map((movie) => (
+                {filteredFreeFullMovies.map((movie, idx) => (
                   <MoviePosterCard
                     key={movie.archiveId ? `ff-ia-${movie.archiveId}` : `ff-${movie.id}`}
                     movie={movie}
                     inWatchlist={watchlistIds.has(movie.id)}
+                    isLocked={isRowIndexLocked(movie, idx)}
                     onOpen={handleOpenMovieCard}
                     onToggleWatchlist={handleToggleCardWatchlist}
                     layout="grid"
@@ -1079,11 +1157,16 @@ export const MoviesPage: React.FC<MoviesPageProps> = React.memo(
             ) : (
               <>
                 <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-                  {gridMovies.map((movie) => (
+                  {gridMovies.map((movie, idx) => (
                     <MoviePosterCard
                       key={movie.archiveId ? `g-ia-${movie.archiveId}` : `g-${movie.id}`}
                       movie={movie}
                       inWatchlist={watchlistIds.has(movie.id)}
+                      isLocked={
+                        debouncedQuery
+                          ? isCatalogMovieLocked(movie)
+                          : isRowIndexLocked(movie, idx)
+                      }
                       onOpen={handleOpenMovieCard}
                       onToggleWatchlist={handleToggleCardWatchlist}
                       layout="grid"
@@ -1136,6 +1219,7 @@ export const MoviesPage: React.FC<MoviesPageProps> = React.memo(
                     }
                     movies={watchlistAsMovies}
                     watchlistIds={watchlistIds}
+                    isMovieLocked={isCatalogMovieLocked}
                     onOpenMovie={handleOpenMovieCard}
                     onToggleWatchlist={handleToggleCardWatchlist}
                   />
@@ -1147,6 +1231,7 @@ export const MoviesPage: React.FC<MoviesPageProps> = React.memo(
                   subtitle="Verified ad-free MP4 & HLS open-access films playing natively with zero pop-ups"
                   movies={builtInOpenMovies}
                   watchlistIds={watchlistIds}
+                  isMovieLocked={isRowIndexLocked}
                   onOpenMovie={handleOpenMovieCard}
                   onToggleWatchlist={handleToggleCardWatchlist}
                 />
@@ -1158,6 +1243,7 @@ export const MoviesPage: React.FC<MoviesPageProps> = React.memo(
                     subtitle="Live public-domain cinema directly from archive.org"
                     movies={archiveRows.classics}
                     watchlistIds={watchlistIds}
+                    isMovieLocked={isRowIndexLocked}
                     onOpenMovie={handleOpenMovieCard}
                     onToggleWatchlist={handleToggleCardWatchlist}
                   />
@@ -1169,6 +1255,7 @@ export const MoviesPage: React.FC<MoviesPageProps> = React.memo(
                     subtitle="Cult science fiction & suspense features · Ad-free native stream"
                     movies={archiveRows.scifiHorror}
                     watchlistIds={watchlistIds}
+                    isMovieLocked={isRowIndexLocked}
                     onOpenMovie={handleOpenMovieCard}
                     onToggleWatchlist={handleToggleCardWatchlist}
                   />
@@ -1180,6 +1267,7 @@ export const MoviesPage: React.FC<MoviesPageProps> = React.memo(
                     subtitle="Classic comedies & animated reels · Ad-free native stream"
                     movies={archiveRows.comedyAnimation}
                     watchlistIds={watchlistIds}
+                    isMovieLocked={isRowIndexLocked}
                     onOpenMovie={handleOpenMovieCard}
                     onToggleWatchlist={handleToggleCardWatchlist}
                   />
@@ -1207,6 +1295,7 @@ export const MoviesPage: React.FC<MoviesPageProps> = React.memo(
                         subtitle={row.subtitle}
                         movies={row.movies}
                         watchlistIds={watchlistIds}
+                        isMovieLocked={isRowIndexLocked}
                         onOpenMovie={handleOpenMovieCard}
                         onToggleWatchlist={handleToggleCardWatchlist}
                       />

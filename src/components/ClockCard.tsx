@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Check, Compass, Copy, Moon, Star, Sun, Sunrise, Sunset } from 'lucide-react';
+import { Check, Compass, Copy, Lock, Moon, Star, Sun, Sunrise, Sunset } from 'lucide-react';
 import type { Country } from '../data/countries';
 import { formatClockForZone } from '../utils/time';
 import { getDaylightInfo, getSeasonInfo } from '../utils/solar';
@@ -28,6 +28,7 @@ interface ClockCardProps {
   onCopy: (country: Country, formattedText: string) => void;
   onFocusGlobe: (country: Country) => void;
   onOpenDetails: (country: Country) => void;
+  isLocked?: boolean;
 }
 
 export const ClockCard: React.FC<ClockCardProps> = React.memo(
@@ -48,6 +49,7 @@ export const ClockCard: React.FC<ClockCardProps> = React.memo(
     onCopy,
     onFocusGlobe,
     onOpenDetails,
+    isLocked = false,
   }) => {
     const [flagError, setFlagError] = useState(false);
 
@@ -82,6 +84,10 @@ export const ClockCard: React.FC<ClockCardProps> = React.memo(
 
     const handleCopy = (e: React.MouseEvent) => {
       e.stopPropagation();
+      if (isLocked) {
+        onOpenDetails(country);
+        return;
+      }
       const weatherStr = weather
         ? ` · ${formatTemperature(weather.tempC, tempUnit)} ${weather.label}`
         : '';
@@ -91,11 +97,19 @@ export const ClockCard: React.FC<ClockCardProps> = React.memo(
 
     const handlePin = (e: React.MouseEvent) => {
       e.stopPropagation();
+      if (isLocked) {
+        onOpenDetails(country);
+        return;
+      }
       onTogglePin(country.iso);
     };
 
     const handleGlobe = (e: React.MouseEvent) => {
       e.stopPropagation();
+      if (isLocked) {
+        onOpenDetails(country);
+        return;
+      }
       onFocusGlobe(country);
     };
 
@@ -182,8 +196,17 @@ export const ClockCard: React.FC<ClockCardProps> = React.memo(
             </div>
           </div>
 
-          {/* Action Buttons */}
+          {/* Action Buttons / Pro Lock Badge */}
           <div className="flex shrink-0 items-center gap-0.5">
+            {isLocked && (
+              <span
+                title="Neon Pro required to unlock all 215 countries"
+                className="mr-1 inline-flex items-center gap-1 rounded-lg border border-fuchsia-400/45 bg-fuchsia-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-fuchsia-200 shadow-[0_0_12px_rgba(232,121,249,0.28)]"
+              >
+                <Lock className="h-2.5 w-2.5 text-cyan-300" aria-hidden="true" />
+                Pro
+              </span>
+            )}
             <button
               type="button"
               onClick={handleGlobe}

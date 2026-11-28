@@ -9,6 +9,7 @@ import {
   Clapperboard,
   Clock,
   Coins,
+  Crown,
   Film,
   Globe2,
   LayoutDashboard,
@@ -51,10 +52,15 @@ import { propagateSatellites } from './services/satellites';
 import { playAlarmChime, playHourlyChime } from './utils/audio';
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
 import {
+  activateUserPro,
   auth,
+  downgradeExpiredUserToFree,
   isFirebaseConfigured,
+  markUserCelebrationShown,
   sanitizeDisplayName,
+  subscribeToUserProfile,
   syncVerifiedUserProfile,
+  type FirestoreUserProfile,
 } from './lib/firebase';
 import {
   clearActiveSession,
@@ -101,6 +107,27 @@ import { AccountPage } from './pages/AccountPage';
 import { getLiveTvChannelForCountry } from './data/liveTvChannels';
 import { useMovieWatchlist } from './services/movieWatchlist';
 import type { TmdbMovie } from './services/tmdb';
+import {
+  FREE_LIMITS,
+  getDaysRemaining,
+  isProActive,
+  isProExpired,
+  PRO_DURATION_MS,
+  readGuestSubscription,
+  saveGuestProSubscription,
+  type LocalGuestSubscription,
+} from './services/subscription';
+import {
+  loadLastReceipt,
+  sendProActivationReceipt,
+  type ProActivationReceipt,
+} from './services/emailReceipt';
+import { AdminPinModal } from './components/AdminPinModal';
+import { SecretAdminDashboard } from './components/SecretAdminDashboard';
+import { UpgradeProModal } from './components/UpgradeProModal';
+import { ReceiptModal } from './components/ReceiptModal';
+import { NeonFireCelebration } from './components/NeonFireCelebration';
+import { BannedAccountScreen } from './components/BannedAccountScreen';
 
 type EntryStage = 'landing' | 'auth' | 'booting' | 'dashboard';
 
@@ -399,11 +426,70 @@ export default function App() {
     };
   }, []);
 
+  // Freemium Subscription, Secret Admin Panel, Email Receipt & Neon Fire Celebration state
+  const [userProfile, setUserProfile] = useState<FirestoreUserProfile | null>(null);
+  const [guestSub, setGuestSub] = useState<LocalGuestSubscription>(() => readGuestSubscription());
+  const [upgradeModalState, setUpgradeModalState] = useState<{ open: boolean; reason: string | null }>({
+    open: false,
+    reason: null,
+  });
+  const [adminPinOpen, setAdminPinOpen] = useState<boolean>(false);
+  const [adminDashboardOpen, setAdminDashboardOpen] = useState<boolean>(false);
+  const [showCelebration, setShowCelebration] = useState<boolean>(false);
+  const [lastReceipt, setLastReceipt] = useState<ProActivationReceipt | null>(() => loadLastReceipt());
+  const [activeReceiptModal, setActiveReceiptModal] = useState<ProActivationReceipt | null>(null);
+  const [bannedNotice, setBannedNotice] = useState<{ email: string; reason?: string } | null>(null);
+
+  const globeTapTimestampsRef = useRef<number[]>([]);
+  const hadFirestoreProfileRef = useRef<boolean>(false);
+  const celebrationTriggerLockRef = useRef<string | null>(null);
+
+  const freeCountryIsoSet = useMemo(
+    () => new Set(COUNTRIES.slice(0, FREE_LIMITS.COUNTRIES).map((c) => c.iso.toLowerCase())),
+    []
+  );
+
+  const isProUser = useMemo(() => {
+    if (firebaseUser && firebaseUser.emailVerified) {
+      return isProActive(userProfile);
+    }
+    return guestSub.plan === 'pro' && Boolean(guestSub.proExpiresAt && Date.now() <= guestSub.proExpiresAt);
+  }, [firebaseUser, userProfile, guestSub]);
+
+  const isCountryLocked = useCallback(
+    (iso: string) => !isProUser && !freeCountryIsoSet.has(iso.toLowerCase()),
+    [isProUser, freeCountryIsoSet]
+  );
+
+  const openUpgradeModal = useCallback((reason?: string) => {
+    setUpgradeModalState({ open: true, reason: reason || null });
+  }, []);
+
+  // Hidden 10 consecutive taps within 5 seconds on the top-left blue Globe icon
+  const handleSecretGlobeTap = useCallback((e: React.MouseEvent) => {
+    const nowMs = Date.now();
+    const recent = globeTapTimestampsRef.current.filter((ts) => nowMs - ts <= 5000);
+    recent.push(nowMs);
+    globeTapTimestampsRef.current = recent;
+    if (recent.length >= 10) {
+      e.preventDefault();
+      e.stopPropagation();
+      globeTapTimestampsRef.current = [];
+      setAdminPinOpen(true);
+    }
+  }, []);
+
   // Subscribe to Firebase Authentication state so verified accounts persist across refreshes
   useEffect(() => {
     if (!isFirebaseConfigured || !auth) return;
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setFirebaseUser(user);
+      if (!user) {
+        setUserProfile(null);
+        hadFirestoreProfileRef.current = false;
+        celebrationTriggerLockRef.current = null;
+        return;
+      }
       if (user && user.emailVerified && user.email) {
         const displayName = sanitizeDisplayName(user.displayName, user.email);
         const syncedSession: AuthSession = {
@@ -418,13 +504,157 @@ export default function App() {
         setAuthSession(syncedSession);
         setEntryStage((prev) => (prev === 'landing' ? 'dashboard' : prev));
         // Merge verified profile into Firestore users/{uid} without blocking UI
-        void syncVerifiedUserProfile(user, displayName).catch(() => {
-          // Handled via structured handleFirestoreError logger
-        });
+        void syncVerifiedUserProfile(user, displayName)
+          .then((profile) => {
+            if (profile?.isBanned) {
+              setBannedNotice({
+                email: profile.email,
+                reason: 'Your account has been suspended by Admin.',
+              });
+              clearActiveSession();
+              setAuthSession(null);
+              if (auth) void signOut(auth).catch(() => {});
+            }
+          })
+          .catch(() => {
+            // Handled via structured handleFirestoreError logger
+          });
       }
     });
     return () => unsubscribe();
   }, []);
+
+  // Real-time Firestore listener for current user's subscription, 30-day expiry, ban, deletion & Pro celebration
+  useEffect(() => {
+    if (!isFirebaseConfigured || !firebaseUser?.uid || !firebaseUser.emailVerified) {
+      return;
+    }
+    const uid = firebaseUser.uid;
+    const userEmail = (firebaseUser.email || '').toLowerCase();
+    hadFirestoreProfileRef.current = false;
+
+    const unsubscribe = subscribeToUserProfile(uid, (profile, exists) => {
+      if (!exists) {
+        if (hadFirestoreProfileRef.current) {
+          // Account document was deleted by Admin while user was online -> revoke access immediately
+          setUserProfile(null);
+          clearActiveSession();
+          setAuthSession(null);
+          setBannedNotice({
+            email: userEmail,
+            reason: 'Your account has been removed by Admin. Access has been revoked.',
+          });
+          if (auth) void signOut(auth).catch(() => {});
+        }
+        return;
+      }
+
+      hadFirestoreProfileRef.current = true;
+      if (!profile) return;
+
+      // 1. Immediate real-time Ban enforcement
+      if (profile.isBanned) {
+        setUserProfile(profile);
+        clearActiveSession();
+        setAuthSession(null);
+        setBannedNotice({
+          email: profile.email || userEmail,
+          reason: 'Your account has been suspended by Admin.',
+        });
+        if (auth) void signOut(auth).catch(() => {});
+        return;
+      }
+
+      // 2. Automatic 30-Day Pro Expiry check
+      if (isProExpired(profile)) {
+        setUserProfile({ ...profile, plan: 'free', proExpiresAt: null });
+        void downgradeExpiredUserToFree(uid).catch(() => {});
+        return;
+      }
+
+      setUserProfile(profile);
+
+      // 3. Real-Time Neon Fire Celebration when Pro is active & celebrationShown === false
+      if (isProActive(profile) && profile.celebrationShown === false) {
+        const triggerKey = `${uid}:${profile.proActivatedAt || 'pro'}`;
+        if (celebrationTriggerLockRef.current !== triggerKey) {
+          celebrationTriggerLockRef.current = triggerKey;
+          setShowCelebration(true);
+          void markUserCelebrationShown(uid).catch(() => {});
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, [firebaseUser?.uid, firebaseUser?.emailVerified, firebaseUser?.email]);
+
+  // Immediate & periodic expiry watchdog so 30-day Pro plans downgrade automatically on load, navigation, or while app stays open
+  useEffect(() => {
+    const checkExpiryNow = () => {
+      if (firebaseUser?.uid && userProfile && isProExpired(userProfile)) {
+        setUserProfile((prev) => (prev ? { ...prev, plan: 'free', proExpiresAt: null } : prev));
+        void downgradeExpiredUserToFree(firebaseUser.uid).catch(() => {});
+      }
+      setGuestSub((prev) => {
+        if (prev.plan === 'pro' && prev.proExpiresAt && Date.now() > prev.proExpiresAt) {
+          return readGuestSubscription();
+        }
+        return prev;
+      });
+    };
+
+    checkExpiryNow();
+    const id = window.setInterval(checkExpiryNow, 60_000);
+    return () => window.clearInterval(id);
+  }, [firebaseUser?.uid, userProfile, route]);
+
+  // Complete Pro activation (via Payment Gateway or Redeem Code "Vidusha5621") + Automated Email Receipt + Celebration
+  const handleCompleteProActivation = useCallback(
+    async ({
+      method,
+      localPriceDisplay,
+      receiptEmail,
+    }: {
+      method: 'payment' | 'redeem';
+      localPriceDisplay: string;
+      receiptEmail: string;
+    }) => {
+      let activatedAtMs = Date.now();
+      let expiresAtMs = activatedAtMs + PRO_DURATION_MS;
+
+      if (firebaseUser?.uid && firebaseUser.emailVerified) {
+        const res = await activateUserPro(firebaseUser.uid, method, PRO_DURATION_MS);
+        activatedAtMs = res.proActivatedAt;
+        expiresAtMs = res.proExpiresAt;
+        celebrationTriggerLockRef.current = `${firebaseUser.uid}:${activatedAtMs}`;
+        void markUserCelebrationShown(firebaseUser.uid).catch(() => {});
+      } else {
+        const updatedGuest = saveGuestProSubscription(method, PRO_DURATION_MS);
+        setGuestSub(updatedGuest);
+        activatedAtMs = updatedGuest.proActivatedAt || activatedAtMs;
+        expiresAtMs = updatedGuest.proExpiresAt || expiresAtMs;
+      }
+
+      const receipt = await sendProActivationReceipt({
+        uid: firebaseUser?.emailVerified ? firebaseUser.uid : null,
+        userEmail: receiptEmail,
+        userName:
+          userProfile?.displayName ||
+          authSession?.displayName ||
+          firebaseUser?.displayName ||
+          'Neon Pro Member',
+        activationMethod: method,
+        activatedAtMs,
+        expiresAtMs,
+        localPriceDisplay,
+      });
+
+      setLastReceipt(receipt);
+      setUpgradeModalState({ open: false, reason: null });
+      setShowCelebration(true);
+    },
+    [firebaseUser, userProfile?.displayName, authSession?.displayName]
+  );
 
   // Only run live orbital polling & propagation on views that display the globe or satellite telemetry
   const isOrbitalViewActive =
@@ -840,12 +1070,29 @@ export default function App() {
 
   const handleOpenCountryPage = useCallback(
     (country: Country) => {
+      if (isCountryLocked(country.iso)) {
+        openUpgradeModal(
+          `Unlock ${country.name} and all ${COUNTRIES.length} countries with Neon Pro (Free plan includes the first ${FREE_LIMITS.COUNTRIES} countries).`
+        );
+        return;
+      }
       setMenuOpen(false);
       setFocusedIso(country.iso);
       navigate({ page: 'country', code: country.iso });
     },
-    [navigate]
+    [isCountryLocked, openUpgradeModal, navigate]
   );
+
+  // Guard direct hash URL navigation (#/country/:lockedIso) or Pro expiry while viewing a locked country
+  useEffect(() => {
+    if (entryStage !== 'dashboard' || route.page !== 'country' || !activeCountryPageCountry) return;
+    if (isCountryLocked(activeCountryPageCountry.iso)) {
+      navigate({ page: 'home' });
+      openUpgradeModal(
+        `Unlock ${activeCountryPageCountry.name} and all ${COUNTRIES.length} countries with Neon Pro (Free plan includes the first ${FREE_LIMITS.COUNTRIES} countries).`
+      );
+    }
+  }, [entryStage, route.page, activeCountryPageCountry, isCountryLocked, navigate, openUpgradeModal]);
 
   const handleNarrateCountry = useCallback(
     (country: Country) => {
@@ -1276,6 +1523,8 @@ export default function App() {
           selectedCountry={activeLiveTvCountry}
           displayDate={displayDate}
           is24Hour={is24Hour}
+          isProUser={isProUser}
+          onRequireUpgrade={openUpgradeModal}
           onSelectCountryCode={(iso) => navigate({ page: 'live-tv', code: iso })}
           onOpenCountryPage={handleOpenCountryPage}
         />
@@ -1292,6 +1541,8 @@ export default function App() {
           selectedCountry={activeLiveRadioCountry}
           displayDate={displayDate}
           is24Hour={is24Hour}
+          isProUser={isProUser}
+          onRequireUpgrade={openUpgradeModal}
           onSelectCountryCode={(iso) => navigate({ page: 'live-radio', code: iso })}
           onOpenCountryPage={handleOpenCountryPage}
           onOpenLiveTvPage={(c) => {
@@ -1307,7 +1558,10 @@ export default function App() {
       return renderDedicatedSubPage(
         'Entertainment Live',
         '10,000+ live HLS channels across Movies, Cartoons, Sports, News, Music & more',
-        <EntertainmentLivePage />
+        <EntertainmentLivePage
+          isProUser={isProUser}
+          onRequireUpgrade={openUpgradeModal}
+        />
       );
     }
 
@@ -1320,6 +1574,8 @@ export default function App() {
           watchlist={movieWatchlist}
           watchlistIds={movieWatchlistIds}
           isCloudSynced={isMovieWatchlistCloudSynced}
+          isProUser={isProUser}
+          onRequireUpgrade={openUpgradeModal}
           onToggleWatchlist={handleToggleMovieWatchlist}
           onOpenMovie={handleOpenMovieDetail}
           onOpenAccount={handleOpenAccountFromMovies}
@@ -1337,6 +1593,8 @@ export default function App() {
           archiveId={route.archiveId}
           watchlistIds={movieWatchlistIds}
           isCloudSynced={isMovieWatchlistCloudSynced}
+          isProUser={isProUser}
+          onRequireUpgrade={openUpgradeModal}
           onToggleWatchlist={handleToggleMovieWatchlist}
           onBackToMovies={handleBackToMovies}
           onOpenMovie={handleOpenMovieDetail}
@@ -1500,6 +1758,21 @@ export default function App() {
         <AccountPage
           session={authSession}
           firebaseUser={firebaseUser}
+          userProfile={userProfile}
+          isProUser={isProUser}
+          hasLastReceipt={Boolean(lastReceipt)}
+          onOpenUpgrade={() => openUpgradeModal()}
+          onViewLastReceipt={() => {
+            if (lastReceipt) setActiveReceiptModal(lastReceipt);
+          }}
+          onAccountBanned={(bannedEmail) => {
+            clearActiveSession();
+            setAuthSession(null);
+            setBannedNotice({
+              email: bannedEmail,
+              reason: 'Your account has been suspended by Admin.',
+            });
+          }}
           onSessionVerified={(verifiedSession) => {
             setAuthSession(verifiedSession);
             setEntryStage('dashboard');
@@ -1532,7 +1805,10 @@ export default function App() {
               }}
               className="flex min-w-0 items-center gap-2.5 whitespace-nowrap rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
             >
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-sky-600 text-white shadow-sm dark:bg-sky-500/20 dark:text-sky-400 dark:ring-1 dark:ring-sky-400/35">
+              <span
+                onClick={handleSecretGlobeTap}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-sky-600 text-white shadow-sm dark:bg-sky-500/20 dark:text-sky-400 dark:ring-1 dark:ring-sky-400/35"
+              >
                 <Globe2 className="h-4.5 w-4.5" aria-hidden="true" />
               </span>
               <div className="min-w-0 leading-tight">
@@ -1944,6 +2220,7 @@ export default function App() {
                         onCopy={handleCopyCard}
                         onFocusGlobe={handleClockCardFocusGlobe}
                         onOpenDetails={handleOpenCountryPage}
+                        isLocked={isCountryLocked(country.iso)}
                       />
                     ))}
                   </div>
@@ -1997,6 +2274,7 @@ export default function App() {
                         onCopy={handleCopyCard}
                         onFocusGlobe={handleClockCardFocusGlobe}
                         onOpenDetails={handleOpenCountryPage}
+                        isLocked={isCountryLocked(country.iso)}
                       />
                     ))}
                   </div>
@@ -2075,6 +2353,57 @@ export default function App() {
 
         {/* Scrollable Drawer Links & Quick Toggles */}
         <div className="flex-1 space-y-5 overflow-y-auto px-5 py-4">
+          {/* Subscription Plan Status / Upgrade Entry */}
+          <div
+            className={`rounded-2xl border p-3.5 ${
+              isProUser
+                ? 'border-cyan-400/40 bg-gradient-to-r from-cyan-500/15 via-slate-900 to-fuchsia-500/15'
+                : 'border-fuchsia-400/30 bg-slate-900/80'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Crown className={`h-4 w-4 ${isProUser ? 'text-amber-300' : 'text-fuchsia-300'}`} aria-hidden="true" />
+                <span className="text-xs font-extrabold text-white">
+                  {isProUser ? 'Neon Pro Active' : 'Free Plan'}
+                </span>
+              </div>
+              {isProUser ? (
+                <span className="rounded-md border border-cyan-400/40 bg-cyan-500/15 px-2 py-0.5 text-[10px] font-bold text-cyan-200">
+                  {getDaysRemaining(userProfile?.proExpiresAt ?? guestSub.proExpiresAt)}d left
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    openUpgradeModal();
+                  }}
+                  className="rounded-lg bg-gradient-to-r from-cyan-400 to-fuchsia-500 px-2.5 py-1 text-[11px] font-extrabold text-slate-950 transition hover:brightness-110"
+                >
+                  Upgrade
+                </button>
+              )}
+            </div>
+            <p className="mt-1 text-[11px] text-slate-400">
+              {isProUser
+                ? 'All 215 countries, Live TV, Radio, Entertainment & Movies unlocked.'
+                : 'Unlock all 215 countries, Live TV, Radio, Entertainment & Movies.'}
+            </p>
+            {isProUser && lastReceipt && (
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuOpen(false);
+                  setActiveReceiptModal(lastReceipt);
+                }}
+                className="mt-2 text-[11px] font-semibold text-cyan-300 underline underline-offset-2 hover:text-cyan-200"
+              >
+                View Latest Pro Receipt
+              </button>
+            )}
+          </div>
+
           {/* 1. Dedicated Full-Screen Pages */}
           <div className="space-y-1.5">
             <p className="px-1 text-[11px] font-semibold uppercase tracking-wider text-sky-300">
@@ -2101,7 +2430,7 @@ export default function App() {
 
             <button
               type="button"
-              onClick={() => handleMenuNavigate({ page: 'country', code: focusedCountry.iso })}
+              onClick={() => handleOpenCountryPage(focusedCountry)}
               className={`flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left text-sm font-semibold transition-colors ${
                 route.page === 'country'
                   ? 'border-sky-400/45 bg-sky-500/18 text-white'
@@ -2116,12 +2445,17 @@ export default function App() {
                 referrerPolicy="no-referrer"
                 className="h-3.5 w-5 shrink-0 rounded-[2px] object-cover ring-1 ring-white/20"
               />
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <p className="truncate">{focusedCountry.name} Page</p>
                 <p className="text-[11px] font-normal text-slate-400">
                   3D characters, anthem, trade &amp; overview
                 </p>
               </div>
+              {isCountryLocked(focusedCountry.iso) && (
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-fuchsia-400/45 bg-fuchsia-500/15 px-1.5 py-0.5 text-[10px] font-bold uppercase text-fuchsia-200">
+                  Pro
+                </span>
+              )}
             </button>
 
             <button
@@ -2560,6 +2894,68 @@ export default function App() {
           route.page === 'movie-detail'
         }
       />
+
+      {/* Secret Admin PIN Modal (Opened via 10 taps in 5s on top-left blue Globe icon) */}
+      <AdminPinModal
+        isOpen={adminPinOpen}
+        onClose={() => setAdminPinOpen(false)}
+        onUnlock={() => {
+          setAdminPinOpen(false);
+          setAdminDashboardOpen(true);
+        }}
+      />
+
+      {/* Full-Screen Secret Admin Command Dashboard */}
+      <SecretAdminDashboard
+        isOpen={adminDashboardOpen}
+        onClose={() => setAdminDashboardOpen(false)}
+        currentUserEmail={firebaseUser?.email || authSession?.email || null}
+        currentUserUid={firebaseUser?.uid || null}
+        onSignOutAndSwitch={() => {
+          void handleLogout();
+          navigate({ page: 'account' });
+        }}
+      />
+
+      {/* Upgrade to Neon Pro Modal (Auto Currency Detection + Checkout + Redeem Code) */}
+      <UpgradeProModal
+        isOpen={upgradeModalState.open}
+        reason={upgradeModalState.reason}
+        liveUsdRates={fxState.rates}
+        userEmail={firebaseUser?.email || authSession?.email || null}
+        isSignedIn={Boolean(firebaseUser && firebaseUser.emailVerified)}
+        onClose={() => setUpgradeModalState({ open: false, reason: null })}
+        onOpenAuth={() => navigate({ page: 'account' })}
+        onCompleteActivation={handleCompleteProActivation}
+      />
+
+      {/* Digital Activation Receipt Modal */}
+      <ReceiptModal
+        receipt={activeReceiptModal}
+        onClose={() => setActiveReceiptModal(null)}
+      />
+
+      {/* Full-Screen Neon Fire & Particle Explosion Celebration */}
+      <NeonFireCelebration
+        isOpen={showCelebration}
+        receipt={lastReceipt}
+        onClose={() => setShowCelebration(false)}
+        onViewReceipt={() => {
+          if (lastReceipt) setActiveReceiptModal(lastReceipt);
+        }}
+      />
+
+      {/* Full-Screen Admin Suspension / Banned Account Blocker */}
+      {bannedNotice && (
+        <BannedAccountScreen
+          email={bannedNotice.email}
+          reason={bannedNotice.reason}
+          onDismiss={() => {
+            setBannedNotice(null);
+            navigate({ page: 'account' });
+          }}
+        />
+      )}
     </>
   );
 }

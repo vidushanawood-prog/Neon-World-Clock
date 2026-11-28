@@ -5,6 +5,7 @@ import {
   ExternalLink,
   Globe2,
   Loader2,
+  Lock,
   Pause,
   Play,
   Radio,
@@ -23,6 +24,7 @@ import {
   fetchRadioStationsForCountry,
   type RadioStation,
 } from '../services/radioBrowser';
+import { FREE_LIMITS } from '../services/subscription';
 import { formatClockForZone } from '../utils/time';
 
 interface LiveRadioPageProps {
@@ -30,6 +32,8 @@ interface LiveRadioPageProps {
   selectedCountry: Country;
   displayDate: Date;
   is24Hour: boolean;
+  isProUser?: boolean;
+  onRequireUpgrade?: (reason: string) => void;
   onSelectCountryCode: (iso: string) => void;
   onOpenCountryPage: (country: Country) => void;
   onOpenLiveTvPage: (country: Country) => void;
@@ -44,10 +48,43 @@ export const LiveRadioPage: React.FC<LiveRadioPageProps> = ({
   selectedCountry,
   displayDate,
   is24Hour,
+  isProUser = false,
+  onRequireUpgrade,
   onSelectCountryCode,
   onOpenCountryPage,
   onOpenLiveTvPage,
 }) => {
+  const freeCountryIsoSet = useMemo(
+    () => new Set(countries.slice(0, FREE_LIMITS.COUNTRIES).map((c) => c.iso.toLowerCase())),
+    [countries]
+  );
+
+  const isCountryLocked = useCallback(
+    (iso: string) => !isProUser && !freeCountryIsoSet.has(iso.toLowerCase()),
+    [isProUser, freeCountryIsoSet]
+  );
+
+  const handleSwitchRadioCountry = useCallback(
+    (c: Country) => {
+      if (isCountryLocked(c.iso)) {
+        onRequireUpgrade?.(
+          `Unlock ${c.name} Live Radio and all ${countries.length} countries with Neon Pro (Free plan includes the first ${FREE_LIMITS.COUNTRIES} countries).`
+        );
+        return;
+      }
+      setCountrySearch('');
+      onSelectCountryCode(c.iso);
+    },
+    [isCountryLocked, countries.length, onRequireUpgrade, onSelectCountryCode]
+  );
+
+  // If downgraded to Free while on a locked country (#101-215), snap back to first free country
+  useEffect(() => {
+    if (isCountryLocked(selectedCountry.iso)) {
+      onSelectCountryCode(FEATURED_RADIO_ISOS[0] || countries[0]?.iso || 'lk');
+    }
+  }, [isCountryLocked, selectedCountry.iso, onSelectCountryCode, countries]);
+
   const localClock = useMemo(
     () => formatClockForZone(displayDate, selectedCountry.timezone, is24Hour),
     [displayDate, selectedCountry.timezone, is24Hour]
@@ -281,8 +318,24 @@ export const LiveRadioPage: React.FC<LiveRadioPageProps> = ({
     [filteredStations, visibleLimit]
   );
 
+  const freeStationIds = useMemo(
+    () => new Set(stations.slice(0, FREE_LIMITS.LIVE_RADIO).map((s) => s.id)),
+    [stations]
+  );
+
+  const isStationLocked = useCallback(
+    (stationId: string) => !isProUser && !freeStationIds.has(stationId),
+    [isProUser, freeStationIds]
+  );
+
   const handleSelectStation = useCallback(
     (station: RadioStation) => {
+      if (isStationLocked(station.id)) {
+        onRequireUpgrade?.(
+          `Unlock "${station.name}" and thousands of worldwide radio stations with Neon Pro (Free plan includes the first ${FREE_LIMITS.LIVE_RADIO} stations).`
+        );
+        return;
+      }
       if (activeStation?.id === station.id) {
         const audio = audioRef.current;
         if (!audio) return;
@@ -301,12 +354,13 @@ export const LiveRadioPage: React.FC<LiveRadioPageProps> = ({
       setActiveStation(station);
       setPlayTriggerNonce((n) => n + 1);
     },
-    [activeStation?.id, audioStatus]
+    [activeStation?.id, audioStatus, isStationLocked, onRequireUpgrade]
   );
 
   const handleStepStation = useCallback(
     (delta: 1 | -1) => {
-      const list = filteredStations.length > 0 ? filteredStations : stations;
+      const baseList = filteredStations.length > 0 ? filteredStations : stations;
+      const list = isProUser ? baseList : baseList.filter((s) => freeStationIds.has(s.id));
       if (list.length === 0) return;
       if (!activeStation) {
         setActiveStation(list[0]);
@@ -319,16 +373,37 @@ export const LiveRadioPage: React.FC<LiveRadioPageProps> = ({
       setActiveStation(list[nextIdx]);
       setPlayTriggerNonce((n) => n + 1);
     },
-    [activeStation, filteredStations, stations]
+    [activeStation, filteredStations, stations, isProUser, freeStationIds]
   );
+
+  // If user is downgraded from Pro to Free while listening to a locked station (5th+), stop playback cleanly
+  useEffect(() => {
+    if (activeStation && isStationLocked(activeStation.id)) {
+      stopAudioEngine();
+      setActiveStation(null);
+      setAudioStatus('idle');
+      setAudioError(null);
+    }
+  }, [activeStation, isStationLocked, stopAudioEngine]);
 
   const handleTogglePlayPause = () => {
     if (!activeStation) {
-      const first = filteredStations[0] || stations[0];
-      if (first) {
-        setActiveStation(first);
-        setPlayTriggerNonce((n) => n + 1);
+      const unlockedList = isProUser
+        ? filteredStations.length > 0
+          ? filteredStations
+          : stations
+        : (filteredStations.length > 0 ? filteredStations : stations).filter((s) =>
+            freeStationIds.has(s.id)
+          );
+      const first = unlockedList[0];
+      if (!first) {
+        onRequireUpgrade?.(
+          `Unlock all ${selectedCountry.name} radio stations with Neon Pro (Free plan includes the first ${FREE_LIMITS.LIVE_RADIO} stations per country).`
+        );
+        return;
       }
+      setActiveStation(first);
+      setPlayTriggerNonce((n) => n + 1);
       return;
     }
     const audio = audioRef.current;
@@ -802,43 +877,19 @@ export const LiveRadioPage: React.FC<LiveRadioPageProps> = ({
 
           {filteredCountryMatches.length > 0 ? (
             <div className="mt-2.5 flex flex-wrap gap-1.5">
-              {filteredCountryMatches.map((c) => (
-                <button
-                  key={c.iso}
-                  type="button"
-                  onClick={() => {
-                    setCountrySearch('');
-                    onSelectCountryCode(c.iso);
-                  }}
-                  className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
-                    c.iso.toLowerCase() === selectedCountry.iso.toLowerCase()
-                      ? 'border-sky-400/55 bg-sky-500/20 text-white'
-                      : 'border-white/10 bg-slate-950/70 text-slate-200 hover:border-sky-400/40 hover:text-white'
-                  }`}
-                >
-                  <img
-                    src={`https://flagcdn.com/w40/${c.iso}.png`}
-                    alt=""
-                    referrerPolicy="no-referrer"
-                    className="h-3 w-4.5 rounded-[2px] object-cover"
-                  />
-                  <span>{c.name}</span>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="no-scrollbar mt-2.5 flex items-center gap-1.5 overflow-x-auto pb-0.5">
-              {featuredCountries.map((c) => {
-                const active = c.iso.toLowerCase() === selectedCountry.iso.toLowerCase();
+              {filteredCountryMatches.map((c) => {
+                const countryLocked = isCountryLocked(c.iso);
                 return (
                   <button
                     key={c.iso}
                     type="button"
-                    onClick={() => onSelectCountryCode(c.iso)}
-                    className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                      active
+                    onClick={() => handleSwitchRadioCountry(c)}
+                    className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${
+                      c.iso.toLowerCase() === selectedCountry.iso.toLowerCase()
                         ? 'border-sky-400/55 bg-sky-500/20 text-white'
-                        : 'border-white/10 bg-white/[0.04] text-slate-300 hover:border-sky-400/35 hover:text-white'
+                        : countryLocked
+                          ? 'border-white/8 bg-slate-950/45 text-slate-400 hover:border-fuchsia-400/45 hover:text-white'
+                          : 'border-white/10 bg-slate-950/70 text-slate-200 hover:border-sky-400/40 hover:text-white'
                     }`}
                   >
                     <img
@@ -848,6 +899,41 @@ export const LiveRadioPage: React.FC<LiveRadioPageProps> = ({
                       className="h-3 w-4.5 rounded-[2px] object-cover"
                     />
                     <span>{c.name}</span>
+                    {countryLocked && (
+                      <Lock className="h-2.5 w-2.5 text-fuchsia-300" aria-hidden="true" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="no-scrollbar mt-2.5 flex items-center gap-1.5 overflow-x-auto pb-0.5">
+              {featuredCountries.map((c) => {
+                const active = c.iso.toLowerCase() === selectedCountry.iso.toLowerCase();
+                const countryLocked = isCountryLocked(c.iso);
+                return (
+                  <button
+                    key={c.iso}
+                    type="button"
+                    onClick={() => handleSwitchRadioCountry(c)}
+                    className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                      active
+                        ? 'border-sky-400/55 bg-sky-500/20 text-white'
+                        : countryLocked
+                          ? 'border-white/8 bg-white/[0.02] text-slate-400 hover:border-fuchsia-400/45 hover:text-white'
+                          : 'border-white/10 bg-white/[0.04] text-slate-300 hover:border-sky-400/35 hover:text-white'
+                    }`}
+                  >
+                    <img
+                      src={`https://flagcdn.com/w40/${c.iso}.png`}
+                      alt=""
+                      referrerPolicy="no-referrer"
+                      className="h-3 w-4.5 rounded-[2px] object-cover"
+                    />
+                    <span>{c.name}</span>
+                    {countryLocked && (
+                      <Lock className="h-2.5 w-2.5 text-fuchsia-300" aria-hidden="true" />
+                    )}
                   </button>
                 );
               })}
@@ -906,6 +992,7 @@ export const LiveRadioPage: React.FC<LiveRadioPageProps> = ({
                 const isPlayingNow = isSelected && audioStatus === 'playing';
                 const isConnectingNow = isSelected && audioStatus === 'connecting';
                 const hasIcon = Boolean(station.favicon && !failedIcons.has(station.favicon));
+                const locked = isStationLocked(station.id);
 
                 return (
                   <button
@@ -915,7 +1002,9 @@ export const LiveRadioPage: React.FC<LiveRadioPageProps> = ({
                     className={`group flex items-center gap-3.5 rounded-2xl border p-3.5 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
                       isSelected
                         ? 'border-emerald-400/60 bg-emerald-500/15 shadow-[0_0_28px_-12px_rgba(16,185,129,0.65)]'
-                        : 'border-white/[0.08] bg-slate-900/60 hover:border-sky-400/40 hover:bg-slate-900/95'
+                        : locked
+                          ? 'border-white/[0.06] bg-slate-900/45 opacity-85 hover:border-fuchsia-400/45 hover:bg-slate-900/85'
+                          : 'border-white/[0.08] bg-slate-900/60 hover:border-sky-400/40 hover:bg-slate-900/95'
                     }`}
                   >
                     {/* Station Favicon / Emblem */}
@@ -956,24 +1045,31 @@ export const LiveRadioPage: React.FC<LiveRadioPageProps> = ({
                       </div>
                     </div>
 
-                    {/* Play / Playing Indicator */}
-                    <span
-                      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors ${
-                        isPlayingNow
-                          ? 'border-emerald-400/60 bg-emerald-400 text-slate-950'
-                          : isConnectingNow
-                            ? 'border-amber-400/50 bg-amber-500/20 text-amber-200'
-                            : 'border-white/12 bg-white/[0.05] text-slate-200 group-hover:border-emerald-400/45 group-hover:bg-emerald-400/15 group-hover:text-emerald-300'
-                      }`}
-                    >
-                      {isConnectingNow ? (
-                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                      ) : isPlayingNow ? (
-                        <Pause className="h-4 w-4 fill-current" aria-hidden="true" />
-                      ) : (
-                        <Play className="h-4 w-4 fill-current" aria-hidden="true" />
-                      )}
-                    </span>
+                    {/* Play / Playing / Pro Lock Indicator */}
+                    {locked ? (
+                      <span className="inline-flex shrink-0 items-center gap-1 rounded-xl border border-fuchsia-400/45 bg-fuchsia-500/15 px-2.5 py-1.5 text-[10px] font-bold uppercase text-fuchsia-200">
+                        <Lock className="h-3 w-3 text-cyan-300" aria-hidden="true" />
+                        Pro
+                      </span>
+                    ) : (
+                      <span
+                        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors ${
+                          isPlayingNow
+                            ? 'border-emerald-400/60 bg-emerald-400 text-slate-950'
+                            : isConnectingNow
+                              ? 'border-amber-400/50 bg-amber-500/20 text-amber-200'
+                              : 'border-white/12 bg-white/[0.05] text-slate-200 group-hover:border-emerald-400/45 group-hover:bg-emerald-400/15 group-hover:text-emerald-300'
+                        }`}
+                      >
+                        {isConnectingNow ? (
+                          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                        ) : isPlayingNow ? (
+                          <Pause className="h-4 w-4 fill-current" aria-hidden="true" />
+                        ) : (
+                          <Play className="h-4 w-4 fill-current" aria-hidden="true" />
+                        )}
+                      </span>
+                    )}
                   </button>
                 );
               })}

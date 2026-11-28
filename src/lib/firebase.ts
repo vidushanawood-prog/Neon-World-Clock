@@ -1,14 +1,18 @@
 import { initializeApp, getApps, getApp, type FirebaseApp, type FirebaseOptions } from 'firebase/app';
 import { getAuth, type Auth, type User } from 'firebase/auth';
 import {
+  collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocFromServer,
   getFirestore,
+  onSnapshot,
   serverTimestamp,
   setDoc,
   type Firestore,
   type Timestamp,
+  type Unsubscribe,
 } from 'firebase/firestore';
 import appletConfig from '../../firebase-applet-config.json';
 
@@ -38,13 +42,47 @@ export interface FirestoreErrorInfo {
   };
 }
 
+export type SubscriptionPlan = 'free' | 'pro';
+export type ActivationMethod = 'none' | 'payment' | 'redeem' | 'admin';
+
 export interface FirestoreUserProfile {
   uid: string;
   email: string;
   displayName: string;
   emailVerified: boolean;
+  plan?: SubscriptionPlan;
+  proActivatedAt?: number | null;
+  proExpiresAt?: number | null;
+  activationMethod?: ActivationMethod;
+  isBanned?: boolean;
+  celebrationShown?: boolean;
   createdAt?: Timestamp | null;
   updatedAt?: Timestamp | null;
+}
+
+export const BOOTSTRAPPED_ADMIN_EMAIL = 'vidushanawood@gmail.com';
+export const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+export function normalizeUserProfile(raw: Partial<FirestoreUserProfile>, fallbackUid?: string): FirestoreUserProfile {
+  return {
+    uid: raw.uid || fallbackUid || '',
+    email: (raw.email || '').trim().toLowerCase(),
+    displayName: raw.displayName || 'Operator',
+    emailVerified: Boolean(raw.emailVerified),
+    plan: raw.plan === 'pro' ? 'pro' : 'free',
+    proActivatedAt: typeof raw.proActivatedAt === 'number' ? raw.proActivatedAt : null,
+    proExpiresAt: typeof raw.proExpiresAt === 'number' ? raw.proExpiresAt : null,
+    activationMethod:
+      raw.activationMethod === 'payment' ||
+      raw.activationMethod === 'redeem' ||
+      raw.activationMethod === 'admin'
+        ? raw.activationMethod
+        : 'none',
+    isBanned: Boolean(raw.isBanned),
+    celebrationShown: typeof raw.celebrationShown === 'boolean' ? raw.celebrationShown : true,
+    createdAt: raw.createdAt ?? null,
+    updatedAt: raw.updatedAt ?? null,
+  };
 }
 
 interface ResolvedFirebaseConfig {
@@ -193,7 +231,7 @@ export function sanitizeDisplayName(rawName: string | null | undefined, email: s
 
 /**
  * Persist or merge the verified user's profile in Firestore at users/{uid}.
- * Never writes plaintext passwords; preserves immutable createdAt on returning logins.
+ * Never writes plaintext passwords; preserves immutable createdAt & existing Pro/Ban state.
  */
 export async function syncVerifiedUserProfile(
   user: User,
@@ -230,6 +268,12 @@ export async function syncVerifiedUserProfile(
         email,
         displayName,
         emailVerified: true,
+        plan: 'free',
+        proActivatedAt: null,
+        proExpiresAt: null,
+        activationMethod: 'none',
+        isBanned: false,
+        celebrationShown: true,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -237,17 +281,39 @@ export async function syncVerifiedUserProfile(
       handleFirestoreError(error, OperationType.CREATE, path);
     }
   } else {
+    const existingData = existingSnap.data() as Partial<FirestoreUserProfile>;
+    // If banned, return existing profile immediately without writing so UI can enforce suspension
+    if (existingData.isBanned === true) {
+      return normalizeUserProfile(existingData, uid);
+    }
+
+    const isLegacyDoc = typeof existingData.plan !== 'string';
+    const isExpiredPro =
+      existingData.plan === 'pro' &&
+      typeof existingData.proExpiresAt === 'number' &&
+      Date.now() > existingData.proExpiresAt;
+
+    const updatePayload: Record<string, unknown> = {
+      email,
+      displayName,
+      emailVerified: true,
+      updatedAt: serverTimestamp(),
+    };
+
+    if (isLegacyDoc) {
+      updatePayload.plan = 'free';
+      updatePayload.proActivatedAt = null;
+      updatePayload.proExpiresAt = null;
+      updatePayload.activationMethod = 'none';
+      updatePayload.isBanned = false;
+      updatePayload.celebrationShown = true;
+    } else if (isExpiredPro) {
+      updatePayload.plan = 'free';
+      updatePayload.proExpiresAt = null;
+    }
+
     try {
-      await setDoc(
-        userRef,
-        {
-          email,
-          displayName,
-          emailVerified: true,
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
+      await setDoc(userRef, updatePayload, { merge: true });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, path);
     }
@@ -256,18 +322,27 @@ export async function syncVerifiedUserProfile(
   try {
     const refreshed = await getDoc(userRef);
     if (refreshed.exists()) {
-      return refreshed.data() as FirestoreUserProfile;
+      return normalizeUserProfile(refreshed.data() as Partial<FirestoreUserProfile>, uid);
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.GET, path);
   }
 
-  return {
-    uid,
-    email,
-    displayName,
-    emailVerified: true,
-  };
+  return normalizeUserProfile(
+    {
+      uid,
+      email,
+      displayName,
+      emailVerified: true,
+      plan: 'free',
+      proActivatedAt: null,
+      proExpiresAt: null,
+      activationMethod: 'none',
+      isBanned: false,
+      celebrationShown: true,
+    },
+    uid
+  );
 }
 
 export async function fetchUserProfile(uid: string): Promise<FirestoreUserProfile | null> {
@@ -275,9 +350,238 @@ export async function fetchUserProfile(uid: string): Promise<FirestoreUserProfil
   const path = `users/${uid}`;
   try {
     const snap = await getDoc(doc(db, 'users', uid));
-    return snap.exists() ? (snap.data() as FirestoreUserProfile) : null;
+    return snap.exists() ? normalizeUserProfile(snap.data() as Partial<FirestoreUserProfile>, uid) : null;
   } catch (error) {
     handleFirestoreError(error, OperationType.GET, path);
+  }
+}
+
+export function subscribeToUserProfile(
+  uid: string,
+  onProfile: (profile: FirestoreUserProfile | null, exists: boolean) => void,
+  onError?: (err: Error) => void
+): Unsubscribe {
+  if (!db || !uid) {
+    return () => {};
+  }
+  const path = `users/${uid}`;
+  const userRef = doc(db, 'users', uid);
+  return onSnapshot(
+    userRef,
+    (snap) => {
+      if (!snap.exists()) {
+        onProfile(null, false);
+        return;
+      }
+      onProfile(normalizeUserProfile(snap.data() as Partial<FirestoreUserProfile>, uid), true);
+    },
+    (error) => {
+      console.error(`Firestore snapshot error at ${path}:`, error);
+      onError?.(error);
+    }
+  );
+}
+
+export function subscribeToAllUsers(
+  onUsers: (users: FirestoreUserProfile[]) => void,
+  onError?: (err: Error) => void
+): Unsubscribe {
+  if (!db) {
+    return () => {};
+  }
+  const usersCol = collection(db, 'users');
+  return onSnapshot(
+    usersCol,
+    (snapshot) => {
+      const list = snapshot.docs.map((d) =>
+        normalizeUserProfile(d.data() as Partial<FirestoreUserProfile>, d.id)
+      );
+      list.sort((a, b) => {
+        const aTime = a.createdAt?.toMillis?.() ?? 0;
+        const bTime = b.createdAt?.toMillis?.() ?? 0;
+        return bTime - aTime;
+      });
+      onUsers(list);
+    },
+    (error) => {
+      console.error('Firestore admin users snapshot error:', error);
+      onError?.(error);
+    }
+  );
+}
+
+export async function activateUserPro(
+  uid: string,
+  method: 'payment' | 'redeem',
+  durationMs: number = THIRTY_DAYS_MS
+): Promise<{ proActivatedAt: number; proExpiresAt: number }> {
+  if (!db || !uid) {
+    throw new Error('Firebase is not initialized.');
+  }
+  const now = Date.now();
+  const proExpiresAt = now + durationMs;
+  const path = `users/${uid}`;
+  try {
+    await setDoc(
+      doc(db, 'users', uid),
+      {
+        plan: 'pro',
+        proActivatedAt: now,
+        proExpiresAt,
+        activationMethod: method,
+        isBanned: false,
+        celebrationShown: false,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+    return { proActivatedAt: now, proExpiresAt };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function downgradeExpiredUserToFree(uid: string): Promise<void> {
+  if (!db || !uid) return;
+  const path = `users/${uid}`;
+  try {
+    await setDoc(
+      doc(db, 'users', uid),
+      {
+        plan: 'free',
+        proExpiresAt: null,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function markUserCelebrationShown(uid: string): Promise<void> {
+  if (!db || !uid) return;
+  const path = `users/${uid}`;
+  try {
+    await setDoc(
+      doc(db, 'users', uid),
+      {
+        celebrationShown: true,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function adminSetUserPlan(
+  targetUser: FirestoreUserProfile,
+  targetPlan: SubscriptionPlan
+): Promise<void> {
+  if (!db || !targetUser.uid) return;
+  const path = `users/${targetUser.uid}`;
+  const now = Date.now();
+  const payload =
+    targetPlan === 'pro'
+      ? {
+          plan: 'pro' as const,
+          proActivatedAt: now,
+          proExpiresAt: now + THIRTY_DAYS_MS,
+          activationMethod: 'admin' as const,
+          isBanned: Boolean(targetUser.isBanned),
+          celebrationShown: false,
+          updatedAt: serverTimestamp(),
+        }
+      : {
+          plan: 'free' as const,
+          proActivatedAt: targetUser.proActivatedAt ?? null,
+          proExpiresAt: null,
+          activationMethod: 'none' as const,
+          isBanned: Boolean(targetUser.isBanned),
+          celebrationShown: true,
+          updatedAt: serverTimestamp(),
+        };
+
+  try {
+    await setDoc(doc(db, 'users', targetUser.uid), payload, { merge: true });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function adminSetUserBanned(
+  targetUser: FirestoreUserProfile,
+  isBanned: boolean
+): Promise<void> {
+  if (!db || !targetUser.uid) return;
+  const path = `users/${targetUser.uid}`;
+  try {
+    await setDoc(
+      doc(db, 'users', targetUser.uid),
+      {
+        plan: targetUser.plan === 'pro' ? 'pro' : 'free',
+        proActivatedAt: typeof targetUser.proActivatedAt === 'number' ? targetUser.proActivatedAt : null,
+        proExpiresAt: typeof targetUser.proExpiresAt === 'number' ? targetUser.proExpiresAt : null,
+        activationMethod: targetUser.activationMethod || 'none',
+        isBanned,
+        celebrationShown: typeof targetUser.celebrationShown === 'boolean' ? targetUser.celebrationShown : true,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function adminDeleteUserProfile(uid: string): Promise<void> {
+  if (!db || !uid) return;
+  const path = `users/${uid}`;
+  try {
+    await deleteDoc(doc(db, 'users', uid));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+export interface ReceiptEmailQueuePayload {
+  uid: string;
+  to: string;
+  transactionId: string;
+  planName: string;
+  amountPaid: string;
+  activationMethod: 'payment' | 'redeem' | 'admin';
+  activationDate: string;
+  expiryDate: string;
+  subject: string;
+  text: string;
+  html: string;
+}
+
+export async function queueReceiptEmailDocument(payload: ReceiptEmailQueuePayload): Promise<void> {
+  if (!db || !payload.uid || !payload.transactionId) return;
+  const path = `mail/${payload.transactionId}`;
+  try {
+    await setDoc(doc(db, 'mail', payload.transactionId), {
+      uid: payload.uid,
+      to: payload.to.trim().toLowerCase(),
+      transactionId: payload.transactionId,
+      planName: payload.planName.slice(0, 120),
+      amountPaid: payload.amountPaid.slice(0, 80),
+      activationMethod: payload.activationMethod,
+      activationDate: payload.activationDate.slice(0, 60),
+      expiryDate: payload.expiryDate.slice(0, 60),
+      message: {
+        subject: payload.subject.slice(0, 160),
+        text: payload.text.slice(0, 4000),
+        html: payload.html.slice(0, 12000),
+      },
+      createdAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
   }
 }
 

@@ -5,6 +5,7 @@ import {
   Clock,
   Cloud,
   Film,
+  Lock,
   Play,
   Plus,
   RefreshCw,
@@ -36,6 +37,7 @@ import {
   type ResolvedArchivePlayback,
 } from '../services/archiveMovies';
 import { NativeMoviePlayer } from '../components/NativeMoviePlayer';
+import { FREE_LIMITS } from '../services/subscription';
 import type { MovieNavigationTarget } from './MoviesPage';
 
 interface MovieDetailPageProps {
@@ -43,6 +45,8 @@ interface MovieDetailPageProps {
   archiveId?: string;
   watchlistIds: Set<number>;
   isCloudSynced: boolean;
+  isProUser?: boolean;
+  onRequireUpgrade?: (reason: string) => void;
   onToggleWatchlist: (movie: TmdbMovie) => Promise<'added' | 'removed'>;
   onBackToMovies: () => void;
   onOpenMovie: (target: MovieNavigationTarget) => void;
@@ -54,6 +58,8 @@ export const MovieDetailPage: React.FC<MovieDetailPageProps> = React.memo(
     archiveId,
     watchlistIds,
     isCloudSynced,
+    isProUser = false,
+    onRequireUpgrade,
     onToggleWatchlist,
     onBackToMovies,
     onOpenMovie,
@@ -538,19 +544,32 @@ export const MovieDetailPage: React.FC<MovieDetailPageProps> = React.memo(
                 </div>
 
                 <div className="no-scrollbar flex gap-3.5 overflow-x-auto pb-2 sm:gap-4">
-                  {freeSpotlightMovies.map((fm) => {
+                  {freeSpotlightMovies.map((fm, idx) => {
                     const fmPoster = getPosterUrl(fm.poster_path, 'w342');
                     const showPoster = Boolean(fmPoster && !brokenSimilarPosters[fm.id]);
+                    const locked = !isProUser && idx >= FREE_LIMITS.CATEGORY_ITEMS;
                     return (
                       <button
                         key={fm.archiveId || fm.id}
                         type="button"
-                        onClick={() =>
-                          onOpenMovie({ id: fm.id, archiveId: fm.archiveId })
-                        }
+                        onClick={() => {
+                          if (locked) {
+                            onRequireUpgrade?.(
+                              `Unlock "${fm.title}" and all full-length movies with Neon Pro (Free plan includes the first ${FREE_LIMITS.CATEGORY_ITEMS} movies per category).`
+                            );
+                            return;
+                          }
+                          onOpenMovie({ id: fm.id, archiveId: fm.archiveId });
+                        }}
                         className="group w-[144px] shrink-0 rounded-2xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 sm:w-[164px]"
                       >
-                        <div className="aspect-[2/3] w-full overflow-hidden rounded-2xl border border-emerald-400/25 bg-[#081226] transition-transform duration-200 ease-out will-change-transform group-hover:scale-[1.03] group-hover:border-emerald-400/60">
+                        <div className="relative aspect-[2/3] w-full overflow-hidden rounded-2xl border border-emerald-400/25 bg-[#081226] transition-transform duration-200 ease-out will-change-transform group-hover:scale-[1.03] group-hover:border-emerald-400/60">
+                          {locked && (
+                            <span className="pointer-events-none absolute top-2 left-2 z-10 inline-flex items-center gap-1 rounded-lg border border-fuchsia-400/50 bg-slate-950/85 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-fuchsia-200 shadow-[0_0_12px_rgba(232,121,249,0.35)]">
+                              <Lock className="h-2.5 w-2.5 text-cyan-300" aria-hidden="true" />
+                              Pro
+                            </span>
+                          )}
                           {showPoster ? (
                             <img
                               src={fmPoster!}
@@ -647,18 +666,33 @@ export const MovieDetailPage: React.FC<MovieDetailPageProps> = React.memo(
                 </div>
 
                 <div className="no-scrollbar flex gap-3.5 overflow-x-auto pb-2 sm:gap-4">
-                  {similarMovies.map((sim) => {
+                  {similarMovies.map((sim, idx) => {
                     const simPoster = getPosterUrl(sim.poster_path, 'w342');
                     const showSimPoster = Boolean(simPoster && !brokenSimilarPosters[sim.id]);
                     const simYear = getMovieYear(sim.release_date);
+                    const locked = !isProUser && idx >= FREE_LIMITS.CATEGORY_ITEMS;
                     return (
                       <button
                         key={sim.id}
                         type="button"
-                        onClick={() => onOpenMovie({ id: sim.id })}
+                        onClick={() => {
+                          if (locked) {
+                            onRequireUpgrade?.(
+                              `Unlock "${sim.title}" and all related titles with Neon Pro (Free plan includes the first ${FREE_LIMITS.CATEGORY_ITEMS} movies per category).`
+                            );
+                            return;
+                          }
+                          onOpenMovie({ id: sim.id });
+                        }}
                         className="group w-[144px] shrink-0 rounded-2xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 sm:w-[164px]"
                       >
-                        <div className="aspect-[2/3] w-full overflow-hidden rounded-2xl border border-white/[0.09] bg-[#081226] transition-transform duration-200 ease-out will-change-transform group-hover:scale-[1.03] group-hover:border-sky-400/45">
+                        <div className="relative aspect-[2/3] w-full overflow-hidden rounded-2xl border border-white/[0.09] bg-[#081226] transition-transform duration-200 ease-out will-change-transform group-hover:scale-[1.03] group-hover:border-sky-400/45">
+                          {locked && (
+                            <span className="pointer-events-none absolute top-2 left-2 z-10 inline-flex items-center gap-1 rounded-lg border border-fuchsia-400/50 bg-slate-950/85 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-fuchsia-200 shadow-[0_0_12px_rgba(232,121,249,0.35)]">
+                              <Lock className="h-2.5 w-2.5 text-cyan-300" aria-hidden="true" />
+                              Pro
+                            </span>
+                          )}
                           {showSimPoster ? (
                             <img
                               src={simPoster!}

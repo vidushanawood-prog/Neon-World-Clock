@@ -35,33 +35,77 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == uid;
     }
 
+    // Pure token-based bootstrapped admin check (safe for allow list — zero get()/exists())
+    function isBootstrappedAdmin() {
+      return isVerifiedUser() &&
+        request.auth.token.email is string &&
+        request.auth.token.email.lower() == 'vidushanawood@gmail.com';
+    }
+
+    function isNotBannedExisting() {
+      return !('isBanned' in existing()) || existing().isBanned == false;
+    }
+
+    function isValidEpochMsOrNull(val) {
+      return val == null || (val is int && val >= 1577836800000 && val <= 4102444800000);
+    }
+
     // Validation Blueprint for UserProfile (/users/{uid})
-    // Mirrors firebase-blueprint.json maxLength & pattern constraints verbatim
+    // Mirrors firebase-blueprint.json maxLength, enum & pattern constraints verbatim
     function isValidUserProfile(data, uid) {
       return (
-        data.keys().hasAll(['uid', 'email', 'displayName', 'emailVerified', 'createdAt']) &&
-        data.keys().hasOnly(['uid', 'email', 'displayName', 'emailVerified', 'createdAt', 'updatedAt']) &&
+        data.keys().hasAll([
+          'uid',
+          'email',
+          'displayName',
+          'emailVerified',
+          'plan',
+          'proActivatedAt',
+          'proExpiresAt',
+          'activationMethod',
+          'isBanned',
+          'celebrationShown',
+          'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid',
+          'email',
+          'displayName',
+          'emailVerified',
+          'plan',
+          'proActivatedAt',
+          'proExpiresAt',
+          'activationMethod',
+          'isBanned',
+          'celebrationShown',
+          'createdAt',
+          'updatedAt'
+        ]) &&
         data.uid is string &&
         isValidId(data.uid) &&
-        data.uid == request.auth.uid &&
         data.uid == uid &&
         data.email is string &&
         data.email.size() >= 3 &&
         data.email.size() <= 254 &&
-        request.auth.token.email is string &&
-        data.email.lower() == request.auth.token.email.lower() &&
         data.displayName is string &&
         data.displayName.size() >= 1 &&
         data.displayName.size() <= 80 &&
         data.emailVerified is bool &&
         data.emailVerified == true &&
+        data.plan is string &&
+        data.plan in ['free', 'pro'] &&
+        isValidEpochMsOrNull(data.proActivatedAt) &&
+        isValidEpochMsOrNull(data.proExpiresAt) &&
+        data.activationMethod is string &&
+        data.activationMethod in ['none', 'payment', 'redeem', 'admin'] &&
+        data.isBanned is bool &&
+        data.celebrationShown is bool &&
         data.createdAt is timestamp &&
         (!('updatedAt' in data) || data.updatedAt is timestamp)
       );
     }
 
     // Validation Blueprint for WatchlistMovie (/users/{uid}/watchlist/{movieId})
-    // Mirrors firebase-blueprint.json constraints verbatim
     function isValidWatchlistMovie(data, uid, movieId) {
       return (
         data.keys().hasAll([
@@ -112,46 +156,206 @@ service cloud.firestore {
       );
     }
 
-    // Verified User Profiles (PII strictly isolated to document owner)
+    // Validation Blueprint for ReceiptEmail (/mail/{mailId})
+    function isValidReceiptEmail(data, mailId) {
+      return (
+        data.keys().hasAll([
+          'uid',
+          'to',
+          'transactionId',
+          'planName',
+          'amountPaid',
+          'activationMethod',
+          'activationDate',
+          'expiryDate',
+          'message',
+          'createdAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid',
+          'to',
+          'transactionId',
+          'planName',
+          'amountPaid',
+          'activationMethod',
+          'activationDate',
+          'expiryDate',
+          'message',
+          'createdAt'
+        ]) &&
+        data.uid is string &&
+        isValidId(data.uid) &&
+        data.to is string &&
+        data.to.size() >= 3 &&
+        data.to.size() <= 254 &&
+        data.transactionId is string &&
+        isValidId(data.transactionId) &&
+        data.transactionId == mailId &&
+        data.planName is string &&
+        data.planName.size() >= 1 &&
+        data.planName.size() <= 120 &&
+        data.amountPaid is string &&
+        data.amountPaid.size() >= 1 &&
+        data.amountPaid.size() <= 80 &&
+        data.activationMethod is string &&
+        data.activationMethod in ['payment', 'redeem', 'admin'] &&
+        data.activationDate is string &&
+        data.activationDate.size() >= 4 &&
+        data.activationDate.size() <= 60 &&
+        data.expiryDate is string &&
+        data.expiryDate.size() >= 4 &&
+        data.expiryDate.size() <= 60 &&
+        data.message is map &&
+        data.message.keys().hasAll(['subject', 'text', 'html']) &&
+        data.message.keys().hasOnly(['subject', 'text', 'html']) &&
+        data.message.subject is string &&
+        data.message.subject.size() >= 1 &&
+        data.message.subject.size() <= 160 &&
+        data.message.text is string &&
+        data.message.text.size() >= 1 &&
+        data.message.text.size() <= 4000 &&
+        data.message.html is string &&
+        data.message.html.size() >= 1 &&
+        data.message.html.size() <= 12000 &&
+        data.createdAt is timestamp
+      );
+    }
+
+    // Verified User Profiles & Freemium/Pro Subscriptions (/users/{uid})
     match /users/{uid} {
-      // Only the owning authenticated user can read their own profile
-      allow get: if isSignedIn() && isValidId(uid) && isOwner(uid);
+      // Owning user or bootstrapped admin may read individual profile
+      allow get: if isValidId(uid) && (isBootstrappedAdmin() || (isSignedIn() && isOwner(uid)));
 
-      // Never allow scraping/listing user emails or profiles
-      allow list: if false;
+      // Only bootstrapped admin may list users (zero get()/exists() cost in list)
+      allow list: if isBootstrappedAdmin();
 
-      // Only verified owner may create their own profile with server timestamp & strict schema
+      // Verified owner creates their own profile initialized strictly on the Free plan
       allow create: if isVerifiedUser() &&
         isValidId(uid) &&
         isOwner(uid) &&
         isValidUserProfile(incoming(), uid) &&
+        incoming().uid == request.auth.uid &&
+        request.auth.token.email is string &&
+        incoming().email.lower() == request.auth.token.email.lower() &&
+        incoming().plan == 'free' &&
+        incoming().proActivatedAt == null &&
+        incoming().proExpiresAt == null &&
+        incoming().activationMethod == 'none' &&
+        incoming().isBanned == false &&
+        incoming().celebrationShown == true &&
         incoming().createdAt == request.time &&
         (!('updatedAt' in incoming()) || incoming().updatedAt == request.time);
 
-      // Action-Based Update: Verified owner may update displayName / synced email / updatedAt only; uid & createdAt immutable
-      allow update: if isVerifiedUser() &&
-        isValidId(uid) &&
-        isOwner(uid) &&
+      // Action-Based Updates: Admin management OR strictly scoped Owner actions
+      allow update: if isValidId(uid) &&
         isValidUserProfile(incoming(), uid) &&
         incoming().uid == existing().uid &&
         incoming().createdAt == existing().createdAt &&
+        (!('updatedAt' in incoming()) || incoming().updatedAt == request.time) &&
         (
-          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'emailVerified', 'updatedAt']) &&
-          (!('updatedAt' in incoming()) || incoming().updatedAt == request.time)
+          // Action 1: Bootstrapped Admin toggles Pro/Free, bans/unbans, or backfills legacy subscription fields
+          (
+            isBootstrappedAdmin() &&
+            incoming().email == existing().email &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'plan',
+              'proActivatedAt',
+              'proExpiresAt',
+              'activationMethod',
+              'isBanned',
+              'celebrationShown',
+              'updatedAt'
+            ])
+          ) ||
+          // Action 2: Verified non-banned owner performs strictly scoped self-service actions
+          (
+            isVerifiedUser() &&
+            isOwner(uid) &&
+            isNotBannedExisting() &&
+            incoming().isBanned == false &&
+            incoming().uid == request.auth.uid &&
+            request.auth.token.email is string &&
+            incoming().email.lower() == request.auth.token.email.lower() &&
+            (
+              // 2a: Regular profile metadata sync
+              (
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'displayName',
+                  'email',
+                  'emailVerified',
+                  'updatedAt'
+                ])
+              ) ||
+              // 2b: One-time legacy profile backfill to Free defaults
+              (
+                !('plan' in existing()) &&
+                incoming().plan == 'free' &&
+                incoming().proActivatedAt == null &&
+                incoming().proExpiresAt == null &&
+                incoming().activationMethod == 'none' &&
+                incoming().celebrationShown == true &&
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'displayName',
+                  'email',
+                  'emailVerified',
+                  'plan',
+                  'proActivatedAt',
+                  'proExpiresAt',
+                  'activationMethod',
+                  'isBanned',
+                  'celebrationShown',
+                  'updatedAt'
+                ])
+              ) ||
+              // 2c: Owner Pro activation via Payment or Redeem Code (strictly capped at 31 days max)
+              (
+                incoming().plan == 'pro' &&
+                incoming().activationMethod in ['payment', 'redeem'] &&
+                incoming().proActivatedAt is int &&
+                incoming().proExpiresAt is int &&
+                incoming().proExpiresAt > incoming().proActivatedAt &&
+                incoming().proExpiresAt - incoming().proActivatedAt <= 2678400000 &&
+                incoming().proExpiresAt <= request.time.toMillis() + 2678400000 &&
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'plan',
+                  'proActivatedAt',
+                  'proExpiresAt',
+                  'activationMethod',
+                  'isBanned',
+                  'celebrationShown',
+                  'updatedAt'
+                ])
+              ) ||
+              // 2d: Automatic 30-day expiry downgrade to Free
+              (
+                incoming().plan == 'free' &&
+                incoming().proExpiresAt == null &&
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'plan',
+                  'proExpiresAt',
+                  'updatedAt'
+                ])
+              ) ||
+              // 2e: Mark Neon Fire celebration as shown
+              (
+                incoming().celebrationShown == true &&
+                incoming().diff(existing()).affectedKeys().hasOnly([
+                  'celebrationShown',
+                  'updatedAt'
+                ])
+              )
+            )
+          )
         );
 
-      // Verified owner may delete their own profile document
-      allow delete: if isVerifiedUser() && isValidId(uid) && isOwner(uid);
+      // Bootstrapped Admin or verified owner may delete profile document
+      allow delete: if isValidId(uid) && (isBootstrappedAdmin() || (isVerifiedUser() && isOwner(uid)));
 
       // Synced Movie Watchlist Subcollection (/users/{uid}/watchlist/{movieId})
       match /watchlist/{movieId} {
-        // Owner-only single-document read
         allow get: if isSignedIn() && isValidId(uid) && isValidMovieId(movieId) && isOwner(uid);
-
-        // Owner-only list query enforced via resource.data.uid (zero get()/exists() cost in list)
         allow list: if isSignedIn() && isOwner(uid) && resource.data.uid == request.auth.uid;
 
-        // Verified owner may add a movie if parent profile exists (Master Gate), schema & timestamp match
         allow create: if isVerifiedUser() &&
           isValidId(uid) &&
           isValidMovieId(movieId) &&
@@ -160,7 +364,6 @@ service cloud.firestore {
           incoming().addedAt == request.time &&
           exists(/databases/$(database)/documents/users/$(uid));
 
-        // Action-Based Update: Verified owner may refresh cached TMDB metadata only; uid, movieId & addedAt immutable
         allow update: if isVerifiedUser() &&
           isValidId(uid) &&
           isValidMovieId(movieId) &&
@@ -169,12 +372,41 @@ service cloud.firestore {
           incoming().uid == existing().uid &&
           incoming().movieId == existing().movieId &&
           incoming().addedAt == existing().addedAt &&
-          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'posterPath', 'backdropPath', 'releaseDate', 'voteAverage', 'overview']) &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'title',
+            'posterPath',
+            'backdropPath',
+            'releaseDate',
+            'voteAverage',
+            'overview'
+          ]) &&
           exists(/databases/$(database)/documents/users/$(uid));
 
-        // Verified owner may remove a movie from their own watchlist
         allow delete: if isVerifiedUser() && isValidId(uid) && isValidMovieId(movieId) && isOwner(uid);
       }
+    }
+
+    // Immutable Activation Receipt Queue (/mail/{mailId}) for Firebase Trigger Email Extension
+    match /mail/{mailId} {
+      allow get: if isValidId(mailId) && (isBootstrappedAdmin() || (isSignedIn() && existing().uid == request.auth.uid));
+      allow list: if isBootstrappedAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+
+      allow create: if isValidId(mailId) &&
+        isValidReceiptEmail(incoming(), mailId) &&
+        incoming().createdAt == request.time &&
+        (
+          isBootstrappedAdmin() ||
+          (
+            isVerifiedUser() &&
+            incoming().uid == request.auth.uid &&
+            request.auth.token.email is string &&
+            incoming().to.lower() == request.auth.token.email.lower() &&
+            exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          )
+        );
+
+      // Receipts are strictly immutable audit records
+      allow update, delete: if false;
     }
   }
 }

@@ -51,7 +51,7 @@ const CURATED_CHANNELS: Record<string, Omit<LiveTvChannel, 'fallbackHlsUrl'>> = 
   lk: {
     channelName: 'ITN Sri Lanka',
     network: 'Independent Television Network (ITN)',
-    category: 'National Television · Live',
+    category: 'National News & Television · Live',
     language: 'Sinhala / English / Tamil',
     hlsUrl: '',
     embedUrl: 'https://cp.comcities.com/embed/k9qpbqnle3q6lhi7',
@@ -64,7 +64,7 @@ const CURATED_CHANNELS: Record<string, Omit<LiveTvChannel, 'fallbackHlsUrl'>> = 
   jp: {
     channelName: 'NHK World-Japan',
     network: 'NHK (Japan Broadcasting Corporation)',
-    category: 'Public International Broadcast',
+    category: 'Public International News',
     language: 'English / Japanese',
     hlsUrl: RELIABLE_GLOBAL_HLS.NHK_WORLD,
     officialUrl: 'https://www3.nhk.or.jp/nhkworld/en/live/',
@@ -284,7 +284,7 @@ const CURATED_CHANNELS: Record<string, Omit<LiveTvChannel, 'fallbackHlsUrl'>> = 
   eg: {
     channelName: 'France 24 Arabic · MENA Live',
     network: 'France 24 / Al Jazeera Regional',
-    category: 'Middle East & North Africa',
+    category: 'Middle East & North Africa News',
     language: 'Arabic',
     hlsUrl: RELIABLE_GLOBAL_HLS.FRANCE24_AR,
     officialUrl: 'https://www.france24.com/ar/live',
@@ -444,7 +444,7 @@ const CURATED_CHANNELS: Record<string, Omit<LiveTvChannel, 'fallbackHlsUrl'>> = 
   be: {
     channelName: 'France 24 & Euronews Brussels',
     network: 'France 24 / Euronews',
-    category: 'European Affairs',
+    category: 'European News & Affairs',
     language: 'French / English',
     hlsUrl: RELIABLE_GLOBAL_HLS.FRANCE24_FR,
     officialUrl: 'https://www.france24.com/fr/direct',
@@ -494,7 +494,7 @@ const CURATED_CHANNELS: Record<string, Omit<LiveTvChannel, 'fallbackHlsUrl'>> = 
   ma: {
     channelName: 'France 24 Français · Maghreb',
     network: 'France Médias Monde',
-    category: 'North Africa & Europe',
+    category: 'North Africa & Europe News',
     language: 'French / Arabic',
     hlsUrl: RELIABLE_GLOBAL_HLS.FRANCE24_FR,
     officialUrl: 'https://www.france24.com/fr/direct',
@@ -662,3 +662,172 @@ export const FEATURED_LIVE_TV_ISOS = [
   'it',
   'za',
 ] as const;
+
+export interface CountryTvChannelItem extends LiveTvChannel {
+  id: string;
+  groupTitle: string;
+  logo?: string;
+  isPrimaryCurated?: boolean;
+}
+
+const countryChannelsCache = new Map<string, { items: CountryTvChannelItem[]; fetchedAt: number }>();
+const COUNTRY_TV_CACHE_TTL_MS = 15 * 60 * 1000;
+
+function extractM3uAttr(line: string, keyWithEqQuote: string): string {
+  const idx = line.indexOf(keyWithEqQuote);
+  if (idx === -1) return '';
+  const start = idx + keyWithEqQuote.length;
+  const end = line.indexOf('"', start);
+  return end > start ? line.slice(start, end).trim() : '';
+}
+
+function normalizeIptvCountryCode(iso: string): string {
+  const lower = iso.toLowerCase();
+  if (lower.startsWith('gb-')) return 'uk';
+  if (lower === 'gb') return 'uk';
+  return lower.slice(0, 2);
+}
+
+/**
+ * Fetches all public HTTPS HLS (.m3u8) TV channels for a specific country from IPTV-Org,
+ * merged with the country's curated primary broadcast channel at index 0.
+ * News channels are ordered before non-News channels so Free users can immediately tune in.
+ */
+export async function fetchCountryLiveTvChannels(
+  country: Country,
+  signal?: AbortSignal
+): Promise<CountryTvChannelItem[]> {
+  const isoKey = country.iso.toLowerCase();
+  const primary = getLiveTvChannelForCountry(country);
+  const primaryItem: CountryTvChannelItem = {
+    ...primary,
+    id: `primary-${isoKey}`,
+    groupTitle: primary.category,
+    isPrimaryCurated: true,
+  };
+
+  const cached = countryChannelsCache.get(isoKey);
+  if (cached && Date.now() - cached.fetchedAt < COUNTRY_TV_CACHE_TTL_MS) {
+    return cached.items;
+  }
+
+  const iptvCode = normalizeIptvCountryCode(isoKey);
+  const playlistUrls =
+    iptvCode === 'uk'
+      ? [
+          'https://iptv-org.github.io/iptv/countries/uk.m3u',
+          'https://iptv-org.github.io/iptv/countries/gb.m3u',
+        ]
+      : [`https://iptv-org.github.io/iptv/countries/${encodeURIComponent(iptvCode)}.m3u`];
+
+  let rawM3u = '';
+  for (const url of playlistUrls) {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 7000);
+    const onExternalAbort = () => controller.abort();
+    signal?.addEventListener('abort', onExternalAbort, { once: true });
+    try {
+      const resp = await fetch(url, { mode: 'cors', signal: controller.signal });
+      if (resp.ok) {
+        const text = await resp.text();
+        if (text && text.includes('#EXTINF:')) {
+          rawM3u = text;
+          break;
+        }
+      }
+    } catch {
+      // Fall through cleanly if a country playlist is unavailable
+    } finally {
+      window.clearTimeout(timer);
+      signal?.removeEventListener('abort', onExternalAbort);
+    }
+  }
+
+  const seenUrls = new Set<string>();
+  if (primaryItem.hlsUrl) seenUrls.add(primaryItem.hlsUrl);
+
+  const newsItems: CountryTvChannelItem[] = [];
+  const otherItems: CountryTvChannelItem[] = [];
+
+  if (rawM3u) {
+    const lines = rawM3u.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line.startsWith('#EXTINF:')) continue;
+
+      let streamUrl = '';
+      let j = i + 1;
+      while (j < lines.length) {
+        const candidate = lines[j].trim();
+        if (!candidate) {
+          j++;
+          continue;
+        }
+        if (candidate.startsWith('#EXTINF:')) break;
+        if (!candidate.startsWith('#')) {
+          streamUrl = candidate;
+          break;
+        }
+        j++;
+      }
+
+      if (
+        !streamUrl ||
+        !streamUrl.startsWith('https://') ||
+        !streamUrl.toLowerCase().includes('.m3u8') ||
+        streamUrl.includes(' ') ||
+        seenUrls.has(streamUrl)
+      ) {
+        continue;
+      }
+
+      const commaIdx = line.lastIndexOf(',');
+      const rawTitle = commaIdx >= 0 ? line.slice(commaIdx + 1).trim() : '';
+      if (!rawTitle || /\[(geo-blocked|not\s*24\/7|offline)\]/i.test(rawTitle)) {
+        continue;
+      }
+
+      const cleanedName = rawTitle
+        .replace(/\(\d{3,4}p\)/gi, '')
+        .replace(/\[[^\]]*\]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!cleanedName || cleanedName.length < 2) continue;
+
+      const rawGroup = extractM3uAttr(line, 'group-title="');
+      const primaryGroup = rawGroup
+        ? rawGroup.split(';')[0].trim() || 'General'
+        : 'General';
+      const rawLogo = extractM3uAttr(line, 'tvg-logo="');
+      const logo = rawLogo.startsWith('https://') ? rawLogo : undefined;
+
+      seenUrls.add(streamUrl);
+      const item: CountryTvChannelItem = {
+        id: `iptv-${isoKey}-${newsItems.length + otherItems.length}`,
+        channelName: cleanedName,
+        network: `${country.name} Live TV`,
+        category: primaryGroup,
+        groupTitle: rawGroup || primaryGroup,
+        language: country.language || 'Local',
+        hlsUrl: streamUrl,
+        fallbackHlsUrl: primary.fallbackHlsUrl || RELIABLE_GLOBAL_HLS.DW_ENGLISH,
+        officialUrl: primary.officialUrl,
+        logo,
+        description: `${cleanedName} (${primaryGroup}) — live HTTPS broadcast from ${country.name}.`,
+      };
+
+      const isNews = `${primaryGroup} ${rawGroup} ${cleanedName}`.toLowerCase().includes('news');
+      if (isNews) {
+        newsItems.push(item);
+      } else {
+        otherItems.push(item);
+      }
+
+      if (newsItems.length + otherItems.length >= 120) break;
+    }
+  }
+
+  const merged = [primaryItem, ...newsItems, ...otherItems];
+  countryChannelsCache.set(isoKey, { items: merged, fetchedAt: Date.now() });
+  return merged;
+}

@@ -12,6 +12,7 @@ import {
   AlertCircle,
   ArrowRight,
   CheckCircle2,
+  Crown,
   Database,
   Eye,
   EyeOff,
@@ -22,6 +23,7 @@ import {
   LogOut,
   Mail,
   MailCheck,
+  Receipt,
   RefreshCw,
   ShieldCheck,
   User as UserIcon,
@@ -43,10 +45,17 @@ import {
   saveActiveSession,
   type AuthSession,
 } from '../utils/auth';
+import { formatShortDate, getDaysRemaining, isProActive } from '../services/subscription';
 
 interface AccountPageProps {
   session: AuthSession | null;
   firebaseUser: User | null;
+  userProfile?: FirestoreUserProfile | null;
+  isProUser?: boolean;
+  hasLastReceipt?: boolean;
+  onOpenUpgrade?: () => void;
+  onViewLastReceipt?: () => void;
+  onAccountBanned?: (email: string) => void;
   onSessionVerified: (session: AuthSession) => void;
   onSignOut: () => Promise<void> | void;
   onOpenDashboard: () => void;
@@ -58,6 +67,12 @@ type AccountTab = 'signin' | 'signup';
 export const AccountPage: React.FC<AccountPageProps> = ({
   session,
   firebaseUser,
+  userProfile,
+  isProUser = false,
+  hasLastReceipt = false,
+  onOpenUpgrade,
+  onViewLastReceipt,
+  onAccountBanned,
   onSessionVerified,
   onSignOut,
   onOpenDashboard,
@@ -170,6 +185,18 @@ export const AccountPage: React.FC<AccountPageProps> = ({
       }
 
       const savedProfile = await syncVerifiedUserProfile(user, resolvedName);
+      if (savedProfile?.isBanned) {
+        if (auth) {
+          try {
+            await signOut(auth);
+          } catch {
+            // ignore
+          }
+        }
+        onAccountBanned?.((user.email || '').toLowerCase());
+        setErrorState({ message: 'Your account has been suspended by Admin.' });
+        return;
+      }
       if (savedProfile) {
         setFirestoreProfile(savedProfile);
         setEditingName(savedProfile.displayName);
@@ -189,7 +216,7 @@ export const AccountPage: React.FC<AccountPageProps> = ({
       setStatusMessage('Email verified! Your profile is synced to Cloud Firestore.');
       onSessionVerified(verifiedSession);
     },
-    [onSessionVerified]
+    [onSessionVerified, onAccountBanned]
   );
 
   // Check Firebase Auth reload() for verification status (manual button + auto tab focus + interval)
@@ -494,8 +521,70 @@ export const AccountPage: React.FC<AccountPageProps> = ({
             </button>
           </div>
 
+          {/* Subscription Plan Banner */}
+          {(() => {
+            const effectiveProfile = userProfile || firestoreProfile;
+            const proActiveNow = isProUser || isProActive(effectiveProfile);
+            const daysRemaining = getDaysRemaining(effectiveProfile?.proExpiresAt);
+            return (
+              <div
+                className={`mt-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border p-4 ${
+                  proActiveNow
+                    ? 'border-cyan-400/40 bg-gradient-to-r from-cyan-500/15 via-slate-950/90 to-fuchsia-500/15'
+                    : 'border-white/10 bg-slate-950/75'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div
+                    className={`flex h-10 w-10 items-center justify-center rounded-xl border ${
+                      proActiveNow
+                        ? 'border-amber-400/50 bg-amber-500/20 text-amber-300'
+                        : 'border-white/15 bg-slate-900 text-slate-400'
+                    }`}
+                  >
+                    <Crown className="h-5 w-5" aria-hidden="true" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-extrabold text-white">
+                      {proActiveNow ? 'Neon World Clock Pro Active' : 'Free Plan Active'}
+                    </p>
+                    <p className="text-[11px] text-slate-400">
+                      {proActiveNow
+                        ? effectiveProfile?.proExpiresAt
+                          ? `${daysRemaining} days remaining · Expires ${formatShortDate(effectiveProfile.proExpiresAt)}`
+                          : 'All 215 countries, Live TV, Radio, Entertainment & Movies unlocked'
+                        : 'First 100 countries + 4 Live TV, Radio, Entertainment & Movies free'}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {hasLastReceipt && onViewLastReceipt && (
+                    <button
+                      type="button"
+                      onClick={onViewLastReceipt}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-cyan-400/35 bg-cyan-500/10 px-3 py-2 text-xs font-semibold text-cyan-200 hover:bg-cyan-500/20"
+                    >
+                      <Receipt className="h-3.5 w-3.5" aria-hidden="true" />
+                      Receipt
+                    </button>
+                  )}
+                  {!proActiveNow && onOpenUpgrade && (
+                    <button
+                      type="button"
+                      onClick={onOpenUpgrade}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-cyan-400 to-fuchsia-500 px-3.5 py-2 text-xs font-extrabold text-slate-950 shadow-[0_0_18px_rgba(34,211,238,0.35)] hover:brightness-110"
+                    >
+                      <Crown className="h-3.5 w-3.5" aria-hidden="true" />
+                      Upgrade to Pro
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Firestore Profile Record Summary */}
-          <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="rounded-2xl border border-white/[0.08] bg-slate-950/70 p-4">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                 Firestore Document Path

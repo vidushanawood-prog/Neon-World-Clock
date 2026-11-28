@@ -5,6 +5,7 @@ import {
   ArrowUpRight,
   ExternalLink,
   Layers,
+  Lock,
   Maximize,
   Minimize,
   Pause,
@@ -21,8 +22,11 @@ import {
 import type { Country } from '../data/countries';
 import {
   FEATURED_LIVE_TV_ISOS,
+  fetchCountryLiveTvChannels,
   getLiveTvChannelForCountry,
+  type CountryTvChannelItem,
 } from '../data/liveTvChannels';
+import { FREE_LIMITS, isCountryLiveTvNewsChannel } from '../services/subscription';
 import { formatClockForZone } from '../utils/time';
 
 interface LiveTvPageProps {
@@ -30,6 +34,8 @@ interface LiveTvPageProps {
   selectedCountry: Country;
   displayDate: Date;
   is24Hour: boolean;
+  isProUser?: boolean;
+  onRequireUpgrade?: (reason: string) => void;
   onSelectCountryCode: (iso: string) => void;
   onOpenCountryPage: (country: Country) => void;
 }
@@ -41,12 +47,169 @@ export const LiveTvPage: React.FC<LiveTvPageProps> = ({
   selectedCountry,
   displayDate,
   is24Hour,
+  isProUser = false,
+  onRequireUpgrade,
   onSelectCountryCode,
   onOpenCountryPage,
 }) => {
+  // Rule 1: Free users access the first 100 countries; remaining 115 countries are Pro-locked
+  const freeCountryIsoSet = useMemo(
+    () => new Set(countries.slice(0, FREE_LIMITS.COUNTRIES).map((c) => c.iso.toLowerCase())),
+    [countries]
+  );
+
+  const isCountryLocked = useCallback(
+    (iso: string) => !isProUser && !freeCountryIsoSet.has(iso.toLowerCase()),
+    [isProUser, freeCountryIsoSet]
+  );
+
+  const handleSelectChannelCountry = useCallback(
+    (c: Country) => {
+      if (isCountryLocked(c.iso)) {
+        onRequireUpgrade?.(
+          `Unlock ${c.name} Live TV and all ${countries.length} countries with Neon Pro (Free plan includes the first ${FREE_LIMITS.COUNTRIES} countries).`
+        );
+        return;
+      }
+      onSelectCountryCode(c.iso);
+    },
+    [isCountryLocked, countries.length, onRequireUpgrade, onSelectCountryCode]
+  );
+
+  // If user is downgraded to Free while on a locked country (#101-215), snap back to first free country (Sri Lanka)
+  useEffect(() => {
+    if (isCountryLocked(selectedCountry.iso)) {
+      onSelectCountryCode(FEATURED_LIVE_TV_ISOS[0] || countries[0]?.iso || 'lk');
+    }
+  }, [isCountryLocked, selectedCountry.iso, onSelectCountryCode, countries]);
+
+  // Rule 2: Load all Live TV channels for selectedCountry (curated national broadcast + IPTV-Org country channels)
+  const primaryCuratedChannel = useMemo<CountryTvChannelItem>(() => {
+    const base = getLiveTvChannelForCountry(selectedCountry);
+    return {
+      ...base,
+      id: `primary-${selectedCountry.iso.toLowerCase()}`,
+      groupTitle: base.category,
+      isPrimaryCurated: true,
+    };
+  }, [selectedCountry]);
+
+  const [countryChannels, setCountryChannels] = useState<CountryTvChannelItem[]>(() => [
+    primaryCuratedChannel,
+  ]);
+  const [loadingCountryChannels, setLoadingCountryChannels] = useState<boolean>(false);
+  const [selectedChannelId, setSelectedChannelId] = useState<string>(primaryCuratedChannel.id);
+  const [channelCategoryFilter, setChannelCategoryFilter] = useState<string>('All');
+  const [channelSearchQuery, setChannelSearchQuery] = useState<string>('');
+
+  // Rule 2 check: For Free users inside a country's Live TV section, ONLY News channels play for free
+  const isTvItemLocked = useCallback(
+    (item: CountryTvChannelItem) => !isProUser && !isCountryLiveTvNewsChannel(item),
+    [isProUser]
+  );
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setCountryChannels([primaryCuratedChannel]);
+    setSelectedChannelId(primaryCuratedChannel.id);
+    setChannelCategoryFilter('All');
+    setChannelSearchQuery('');
+    setLoadingCountryChannels(true);
+
+    void fetchCountryLiveTvChannels(selectedCountry, controller.signal)
+      .then((items) => {
+        if (controller.signal.aborted) return;
+        setCountryChannels(items);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoadingCountryChannels(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [selectedCountry, primaryCuratedChannel]);
+
   const channel = useMemo(
-    () => getLiveTvChannelForCountry(selectedCountry),
-    [selectedCountry]
+    () => countryChannels.find((ch) => ch.id === selectedChannelId) || primaryCuratedChannel,
+    [countryChannels, selectedChannelId, primaryCuratedChannel]
+  );
+
+  // If downgraded to Free while watching a non-News channel, automatically switch back to a News channel
+  useEffect(() => {
+    if (isTvItemLocked(channel)) {
+      const firstFreeNews =
+        countryChannels.find((ch) => isCountryLiveTvNewsChannel(ch)) || primaryCuratedChannel;
+      setSelectedChannelId(firstFreeNews.id);
+    }
+  }, [isTvItemLocked, channel, countryChannels, primaryCuratedChannel]);
+
+  const handleSelectCountryChannel = useCallback(
+    (item: CountryTvChannelItem) => {
+      if (isTvItemLocked(item)) {
+        onRequireUpgrade?.(
+          `Unlock "${item.channelName}" and all non-News ${selectedCountry.name} Live TV channels with Neon Pro (Free plan includes ${selectedCountry.name} News channels only).`
+        );
+        return;
+      }
+      setSelectedChannelId(item.id);
+      setStreamMode('primary');
+      setEmbedSource('primary');
+      setEmbedLoaded(false);
+      setEmbedError(false);
+      setShowEmbedFallback(false);
+      setStatus('connecting');
+      setErrorReason(null);
+      setAutoplayMutedNotice(false);
+    },
+    [isTvItemLocked, onRequireUpgrade, selectedCountry.name]
+  );
+
+  const countryChannelCategories = useMemo(() => {
+    const counts = new Map<string, number>();
+    let newsCount = 0;
+    for (const item of countryChannels) {
+      if (isCountryLiveTvNewsChannel(item)) {
+        newsCount += 1;
+      } else {
+        const cat = item.category || 'General';
+        counts.set(cat, (counts.get(cat) || 0) + 1);
+      }
+    }
+    const others = [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 7)
+      .map(([cat]) => cat);
+    const tabs = ['All'];
+    if (newsCount > 0) tabs.push('News');
+    for (const c of others) {
+      if (!tabs.includes(c)) tabs.push(c);
+    }
+    return tabs;
+  }, [countryChannels]);
+
+  const filteredCountryChannels = useMemo(() => {
+    const q = channelSearchQuery.trim().toLowerCase();
+    return countryChannels.filter((item) => {
+      if (channelCategoryFilter === 'News') {
+        if (!isCountryLiveTvNewsChannel(item)) return false;
+      } else if (channelCategoryFilter !== 'All') {
+        if ((item.category || 'General').toLowerCase() !== channelCategoryFilter.toLowerCase()) {
+          return false;
+        }
+      }
+      if (!q) return true;
+      return (
+        item.channelName.toLowerCase().includes(q) ||
+        item.category.toLowerCase().includes(q) ||
+        item.groupTitle.toLowerCase().includes(q)
+      );
+    });
+  }, [countryChannels, channelCategoryFilter, channelSearchQuery]);
+
+  const newsChannelsCount = useMemo(
+    () => countryChannels.filter((item) => isCountryLiveTvNewsChannel(item)).length,
+    [countryChannels]
   );
 
   const localClock = useMemo(
@@ -917,6 +1080,141 @@ export const LiveTvPage: React.FC<LiveTvPageProps> = ({
         </span>
       </section>
 
+      {/* 3B. Selected Country Live TV Channel List (Free = News channels only, Pro = All channels) */}
+      <section
+        aria-label={`${selectedCountry.name} Live TV channels`}
+        className="space-y-4 rounded-3xl border border-sky-400/20 bg-[#071022]/90 p-5 sm:p-6"
+      >
+        <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+          <div>
+            <h2 className="flex flex-wrap items-center gap-2 text-sm font-bold text-white sm:text-base">
+              <Tv className="h-4 w-4 text-cyan-400" aria-hidden="true" />
+              <span>{selectedCountry.name} Live TV Channels</span>
+              <span className="tabular-nums text-xs font-medium text-slate-400">
+                ({countryChannels.length})
+              </span>
+            </h2>
+            <p className="mt-0.5 text-xs text-slate-400">
+              {isProUser
+                ? `Pro Plan: All ${countryChannels.length} ${selectedCountry.name} channels unlocked`
+                : `Free Plan: ${newsChannelsCount} News ${newsChannelsCount === 1 ? 'channel' : 'channels'} unlocked · Upgrade to Neon Pro for all other TV channels`}
+            </p>
+          </div>
+
+          <div className="relative w-full sm:w-72">
+            <Search
+              className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400"
+              aria-hidden="true"
+            />
+            <input
+              type="search"
+              value={channelSearchQuery}
+              onChange={(e) => setChannelSearchQuery(e.target.value)}
+              placeholder={`Filter ${selectedCountry.name} TV channels…`}
+              aria-label={`Search ${selectedCountry.name} TV channels`}
+              className="h-9 w-full rounded-xl border border-white/12 bg-slate-950/85 pr-8 pl-9 text-xs text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-400/20"
+            />
+            {channelSearchQuery && (
+              <button
+                type="button"
+                onClick={() => setChannelSearchQuery('')}
+                aria-label="Clear channel filter"
+                className="absolute top-1/2 right-2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-400 hover:bg-white/10 hover:text-white"
+              >
+                <X className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {countryChannelCategories.length > 1 && (
+          <div className="no-scrollbar flex items-center gap-1.5 overflow-x-auto pb-0.5">
+            {countryChannelCategories.map((cat) => {
+              const active = channelCategoryFilter === cat;
+              return (
+                <button
+                  key={cat}
+                  type="button"
+                  onClick={() => setChannelCategoryFilter(cat)}
+                  className={`rounded-xl px-3 py-1.5 text-[11px] font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                    active
+                      ? 'bg-sky-500 text-slate-950'
+                      : 'border border-white/10 bg-white/[0.04] text-slate-300 hover:border-sky-400/40 hover:text-white'
+                  }`}
+                >
+                  {cat === 'News' && !isProUser ? 'News (Free)' : cat}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {loadingCountryChannels && countryChannels.length <= 1 && (
+          <p className="text-xs text-cyan-300/80">
+            Loading additional {selectedCountry.name} public TV broadcasts…
+          </p>
+        )}
+
+        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+          {filteredCountryChannels.map((item) => {
+            const active = item.id === channel.id;
+            const locked = isTvItemLocked(item);
+            const isNews = isCountryLiveTvNewsChannel(item);
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => handleSelectCountryChannel(item)}
+                className={`flex items-center justify-between gap-3 rounded-2xl border px-3.5 py-2.5 text-left transition-all ${
+                  active
+                    ? 'border-sky-400/65 bg-sky-500/18 text-white shadow-[0_0_24px_-10px_rgba(56,189,248,0.65)]'
+                    : locked
+                      ? 'border-white/[0.06] bg-slate-950/45 text-slate-400 hover:border-fuchsia-400/45 hover:bg-slate-900/80'
+                      : 'border-white/[0.08] bg-slate-950/65 text-slate-200 hover:border-sky-400/40 hover:bg-slate-900/90 hover:text-white'
+                }`}
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-slate-900">
+                    {item.logo ? (
+                      <img
+                        src={item.logo}
+                        alt=""
+                        referrerPolicy="no-referrer"
+                        loading="lazy"
+                        className="h-7 w-7 object-contain"
+                      />
+                    ) : (
+                      <Tv
+                        className={`h-4 w-4 ${active ? 'text-sky-300' : isNews ? 'text-cyan-400' : 'text-slate-400'}`}
+                        aria-hidden="true"
+                      />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-bold text-white">{item.channelName}</p>
+                    <p className="truncate text-[11px] text-slate-400">
+                      {item.category}
+                      {isNews ? ' · News' : ''}
+                    </p>
+                  </div>
+                </div>
+
+                {locked ? (
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-fuchsia-400/45 bg-fuchsia-500/15 px-2 py-0.5 text-[10px] font-bold uppercase text-fuchsia-200">
+                    <Lock className="h-2.5 w-2.5 text-cyan-300" aria-hidden="true" />
+                    Pro
+                  </span>
+                ) : (
+                  <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-cyan-300">
+                    {active ? 'Watching' : 'Play'}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
       {/* 4. Featured Global Live TV Channels Strip */}
       <section aria-label="Featured live TV channels" className="space-y-3">
         <div className="flex items-center justify-between gap-2">
@@ -924,22 +1222,25 @@ export const LiveTvPage: React.FC<LiveTvPageProps> = ({
             <Tv className="h-4 w-4 text-sky-400" aria-hidden="true" />
             <span>Featured Global Broadcasts</span>
           </h2>
-          <span className="text-xs text-slate-400">One-tap channel switch</span>
+          <span className="text-xs text-slate-400">One-tap country switch</span>
         </div>
 
         <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
           {featuredCountries.map((c) => {
             const ch = getLiveTvChannelForCountry(c);
             const active = c.iso.toLowerCase() === selectedCountry.iso.toLowerCase();
+            const locked = isCountryLocked(c.iso);
             return (
               <button
                 key={c.iso}
                 type="button"
-                onClick={() => onSelectCountryCode(c.iso)}
+                onClick={() => handleSelectChannelCountry(c)}
                 className={`flex items-center gap-2.5 rounded-2xl border p-3 text-left transition-all ${
                   active
                     ? 'border-sky-400/60 bg-sky-500/18 text-white shadow-[0_0_24px_-10px_rgba(56,189,248,0.6)]'
-                    : 'border-white/[0.08] bg-slate-900/60 text-slate-200 hover:border-sky-400/35 hover:bg-slate-900/90 hover:text-white'
+                    : locked
+                      ? 'border-white/[0.06] bg-slate-900/45 text-slate-400 hover:border-fuchsia-400/45 hover:bg-slate-900/80'
+                      : 'border-white/[0.08] bg-slate-900/60 text-slate-200 hover:border-sky-400/35 hover:bg-slate-900/90 hover:text-white'
                 }`}
               >
                 <img
@@ -952,6 +1253,12 @@ export const LiveTvPage: React.FC<LiveTvPageProps> = ({
                   <p className="truncate text-xs font-bold">{c.name}</p>
                   <p className="truncate text-[11px] text-slate-400">{ch.channelName}</p>
                 </div>
+                {locked && (
+                  <span className="inline-flex shrink-0 items-center gap-0.5 rounded-md border border-fuchsia-400/40 bg-fuchsia-500/15 px-1.5 py-0.5 text-[9px] font-bold uppercase text-fuchsia-200">
+                    <Lock className="h-2.5 w-2.5 text-cyan-300" aria-hidden="true" />
+                    Pro
+                  </span>
+                )}
               </button>
             );
           })}
@@ -1003,15 +1310,18 @@ export const LiveTvPage: React.FC<LiveTvPageProps> = ({
           {filteredCountries.map((c) => {
             const ch = getLiveTvChannelForCountry(c);
             const active = c.iso.toLowerCase() === selectedCountry.iso.toLowerCase();
+            const locked = isCountryLocked(c.iso);
             return (
               <button
                 key={c.iso}
                 type="button"
-                onClick={() => onSelectCountryCode(c.iso)}
+                onClick={() => handleSelectChannelCountry(c)}
                 className={`flex items-center justify-between gap-3 rounded-2xl border px-3.5 py-2.5 text-left transition-colors ${
                   active
                     ? 'border-sky-400/55 bg-sky-500/16 text-white'
-                    : 'border-white/[0.07] bg-slate-950/60 text-slate-200 hover:border-sky-400/35 hover:bg-slate-900/90'
+                    : locked
+                      ? 'border-white/[0.06] bg-slate-950/45 text-slate-400 hover:border-fuchsia-400/45 hover:bg-slate-900/80'
+                      : 'border-white/[0.07] bg-slate-950/60 text-slate-200 hover:border-sky-400/35 hover:bg-slate-900/90'
                 }`}
               >
                 <div className="flex min-w-0 items-center gap-3">
@@ -1027,9 +1337,16 @@ export const LiveTvPage: React.FC<LiveTvPageProps> = ({
                     <p className="truncate text-[11px] text-slate-400">{ch.channelName}</p>
                   </div>
                 </div>
-                <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-cyan-300">
-                  {active ? 'Watching' : 'Tune'}
-                </span>
+                {locked ? (
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-fuchsia-400/40 bg-fuchsia-500/15 px-1.5 py-0.5 text-[10px] font-bold uppercase text-fuchsia-200">
+                    <Lock className="h-2.5 w-2.5 text-cyan-300" aria-hidden="true" />
+                    Pro
+                  </span>
+                ) : (
+                  <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-cyan-300">
+                    {active ? 'Watching' : 'Tune'}
+                  </span>
+                )}
               </button>
             );
           })}

@@ -122,6 +122,17 @@ export const AuthGate: React.FC<AuthGateProps> = ({
         }
       }
       const saved = await syncVerifiedUserProfile(user, cleanName);
+      if (saved?.isBanned) {
+        if (auth) {
+          try {
+            await signOut(auth);
+          } catch {
+            // ignore
+          }
+        }
+        setErrorState({ message: 'Your account has been suspended by Admin.' });
+        return;
+      }
       const session: AuthSession = {
         uid: user.uid,
         email: (user.email || '').toLowerCase(),

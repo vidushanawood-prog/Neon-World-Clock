@@ -10,6 +10,7 @@ import {
   Film,
   Heart,
   Layers,
+  Lock,
   Maximize,
   Minimize,
   Music,
@@ -34,7 +35,6 @@ import {
   CATEGORY_TABS,
   clearCachedChannelHealth,
   getCachedHealthSnapshot,
-  INITIAL_CUSTOM_ENTERTAINMENT_CHANNELS,
   loadEntertainmentChannels,
   probeHlsStream,
   setCachedChannelHealth,
@@ -44,6 +44,22 @@ import {
   type EntertainmentCategory,
   type EntertainmentChannel,
 } from '../services/entertainmentStreams';
+import { FREE_LIMITS } from '../services/subscription';
+
+const ENTERTAINMENT_CATEGORY_IDS: EntertainmentCategory[] = [
+  'animation',
+  'movies',
+  'family',
+  'sports',
+  'news',
+  'entertainment',
+  'music',
+  'comedy',
+  'documentary',
+  'lifestyle',
+  'kids',
+  'series',
+];
 
 type StreamStatus = 'connecting' | 'playing' | 'buffering' | 'paused' | 'error';
 
@@ -88,25 +104,6 @@ function CategoryIcon({
   }
 }
 
-function getChannelMonogram(name: string): string {
-  const cleaned = name
-    .replace(/\([^)]*\)/g, ' ')
-    .replace(/\[[^\]]*\]/g, ' ')
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .trim();
-  if (!cleaned) return '';
-  const words = cleaned.split(/\s+/).filter(Boolean);
-  if (words.length === 1) {
-    return words[0].slice(0, 3).toUpperCase();
-  }
-  const first = words[0];
-  const second = words[1];
-  if (first.length <= 3 && /^\d+$/.test(second)) {
-    return `${first.slice(0, 2)}${second}`.toUpperCase();
-  }
-  return `${first[0] || ''}${second[0] || ''}`.toUpperCase();
-}
-
 function ChannelLogoBadge({
   channel,
   isBroken,
@@ -121,7 +118,6 @@ function ChannelLogoBadge({
   size?: 'sm' | 'md';
 }) {
   const showLogo = Boolean(channel.logo && !isBroken);
-  const monogram = channel.isCustomPlaylist ? getChannelMonogram(channel.name) : '';
   const boxClass =
     size === 'sm'
       ? 'h-9 w-9 rounded-xl'
@@ -133,9 +129,7 @@ function ChannelLogoBadge({
       className={`flex ${boxClass} shrink-0 items-center justify-center overflow-hidden border ${
         isSelected
           ? 'border-sky-400/50 bg-sky-500/15'
-          : channel.isCustomPlaylist
-            ? 'border-fuchsia-400/30 bg-gradient-to-br from-fuchsia-500/20 via-slate-950 to-cyan-500/20'
-            : 'border-white/10 bg-slate-950/90'
+          : 'border-white/10 bg-slate-950/90'
       }`}
     >
       {showLogo ? (
@@ -147,15 +141,6 @@ function ChannelLogoBadge({
           onError={() => onBroken(channel.id)}
           className={imgClass}
         />
-      ) : monogram ? (
-        <span
-          aria-hidden="true"
-          className={`font-black tracking-tight ${
-            size === 'sm' ? 'text-[11px]' : 'text-xs'
-          } ${isSelected ? 'text-sky-200' : 'text-fuchsia-200'}`}
-        >
-          {monogram}
-        </span>
       ) : (
         <CategoryIcon
           category={channel.category}
@@ -166,10 +151,15 @@ function ChannelLogoBadge({
   );
 }
 
-export const EntertainmentLivePage: React.FC = React.memo(() => {
+interface EntertainmentLivePageProps {
+  isProUser?: boolean;
+  onRequireUpgrade?: (reason: string) => void;
+}
+
+export const EntertainmentLivePage: React.FC<EntertainmentLivePageProps> = React.memo(
+  ({ isProUser = false, onRequireUpgrade }) => {
   const [channels, setChannels] = useState<EntertainmentChannel[]>(() => [
     ...VERIFIED_SPOTLIGHT_CHANNELS,
-    ...INITIAL_CUSTOM_ENTERTAINMENT_CHANNELS,
   ]);
   const [isLoadingPlaylist, setIsLoadingPlaylist] = useState<boolean>(true);
   const [loadedPlaylistsCount, setLoadedPlaylistsCount] = useState<number>(0);
@@ -277,9 +267,9 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
         queue.push(ch);
       };
 
-      // 1. Prioritize spotlight, custom playlists & currently active category top candidates first
+      // 1. Prioritize spotlight & currently active category top candidates first
       for (const ch of channels) {
-        if (ch.featured || ch.isCustomPlaylist) pushIfUntested(ch);
+        if (ch.featured) pushIfUntested(ch);
       }
 
       const currentCat = activeCategoryRef.current;
@@ -522,16 +512,60 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
     return () => observer.disconnect();
   }, [visibleLimit, sortedFilteredChannels.length]);
 
-  // Custom M3U8 playlist channels parsed from the 10 custom sources (always visible in Entertainment / All)
-  const customPlaylistChannels = useMemo(() => {
-    const q = deferredSearchQuery.trim().toLowerCase();
-    return channels.filter((ch) => {
-      if (!ch.isCustomPlaylist) return false;
-      if (activeCategory !== 'all' && !ch.categories.includes(activeCategory)) return false;
-      if (q && !ch.searchText.includes(q)) return false;
-      return true;
-    });
-  }, [channels, activeCategory, deferredSearchQuery]);
+  // Independent 4-free-channels-per-category map (computed per category in sorted Live -> Untested -> Offline order, ignoring search)
+  const { freeIdsByCategory, allFreeIdsAcrossCategories } = useMemo(() => {
+    const byCat = {} as Record<EntertainmentCategory, Set<string>>;
+    const union = new Set<string>();
+
+    for (const cat of ENTERTAINMENT_CATEGORY_IDS) {
+      const working: string[] = [];
+      const untested: string[] = [];
+      const offline: string[] = [];
+
+      for (let i = 0; i < channels.length; i++) {
+        const ch = channels[i];
+        if (!ch.categories.includes(cat)) continue;
+        const health = channelHealth[ch.id];
+        if (health === 'working') working.push(ch.id);
+        else if (health === 'offline') offline.push(ch.id);
+        else untested.push(ch.id);
+      }
+
+      const ordered = working.concat(untested, offline);
+      const topIds = ordered.slice(0, FREE_LIMITS.CATEGORY_ITEMS);
+      byCat[cat] = new Set(topIds);
+      for (const id of topIds) union.add(id);
+    }
+
+    return { freeIdsByCategory: byCat, allFreeIdsAcrossCategories: union };
+  }, [channels, channelHealth]);
+
+  const isChannelLocked = useCallback(
+    (channelId: string) => {
+      if (isProUser) return false;
+      if (activeCategory !== 'all') {
+        return !freeIdsByCategory[activeCategory]?.has(channelId);
+      }
+      return !allFreeIdsAcrossCategories.has(channelId);
+    },
+    [isProUser, activeCategory, freeIdsByCategory, allFreeIdsAcrossCategories]
+  );
+
+  // If a Pro user downgrades to Free while watching a locked channel, switch to the first unlocked channel
+  const prevIsProRef = useRef<boolean>(isProUser);
+  useEffect(() => {
+    const downgraded = prevIsProRef.current && !isProUser;
+    prevIsProRef.current = isProUser;
+    if (!downgraded) return;
+    if (selectedChannelId && !allFreeIdsAcrossCategories.has(selectedChannelId)) {
+      const firstUnlocked =
+        channels.find((ch) => allFreeIdsAcrossCategories.has(ch.id)) || channels[0];
+      if (firstUnlocked) {
+        setSelectedChannelId(firstUnlocked.id);
+        setStatus('connecting');
+      }
+    }
+  }, [isProUser, selectedChannelId, allFreeIdsAcrossCategories, channels]);
 
   // Quick-switch spotlight cards: prefer verified working channels first across categories
   const quickSwitchChannels = useMemo(() => {
@@ -553,14 +587,19 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
     setBrokenLogos((prev) => (prev[channelId] ? prev : { ...prev, [channelId]: true }));
   }, []);
 
-  // Find next working channel: strictly prefers already-verified 'working' channels first, then untested
+  // Find next working channel: strictly prefers already-verified 'working' channels first, then untested (respecting Free 4-per-category limits)
   const findNextWorkingChannel = useCallback(
     (
       excludeId: string,
       healthSnapshot: Record<string, ChannelHealth>
     ): EntertainmentChannel | null => {
-      const pool = sortedFilteredChannels.length > 1 ? sortedFilteredChannels : channels;
-      if (pool.length === 0) return null;
+      const basePool = sortedFilteredChannels.length > 1 ? sortedFilteredChannels : channels;
+      const pool = isProUser ? basePool : basePool.filter((c) => !isChannelLocked(c.id));
+      const fallbackPool = isProUser
+        ? channels
+        : channels.filter((c) => allFreeIdsAcrossCategories.has(c.id));
+
+      if (pool.length === 0 && fallbackPool.length === 0) return null;
       const currentIdx = pool.findIndex((c) => c.id === excludeId);
       const startIdx = currentIdx >= 0 ? currentIdx + 1 : 0;
 
@@ -571,8 +610,8 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
           return candidate;
         }
       }
-      // 2nd pass: verified working channels across full 1,000+ catalog
-      for (const candidate of channels) {
+      // 2nd pass: verified working channels across eligible catalog
+      for (const candidate of fallbackPool) {
         if (candidate.id !== excludeId && healthSnapshot[candidate.id] === 'working') {
           return candidate;
         }
@@ -584,9 +623,15 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
           return candidate;
         }
       }
+      // 4th pass: any remaining eligible channel
+      for (const candidate of fallbackPool) {
+        if (candidate.id !== excludeId && healthSnapshot[candidate.id] !== 'offline') {
+          return candidate;
+        }
+      }
       return null;
     },
-    [channels, sortedFilteredChannels]
+    [channels, sortedFilteredChannels, isProUser, isChannelLocked, allFreeIdsAcrossCategories]
   );
 
   const selectChannel = useCallback((channel: EntertainmentChannel, isManual = true) => {
@@ -597,6 +642,14 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
     if (isManual) {
       consecutiveSkipsRef.current = 0;
       setFailedBanner(null);
+    }
+    if (isChannelLocked(channel.id)) {
+      if (isManual) {
+        onRequireUpgrade?.(
+          `Unlock "${channel.name}" and all live entertainment channels with Neon Pro (Free plan includes the first ${FREE_LIMITS.CATEGORY_ITEMS} channels per category).`
+        );
+      }
+      return;
     }
     setErrorReason(null);
     setUnstableDetail(null);
@@ -609,7 +662,7 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
       }
       return channel.id;
     });
-  }, []);
+  }, [isChannelLocked, onRequireUpgrade]);
 
   const handleNextWorkingChannel = useCallback(() => {
     if (!selectedChannel) return;
@@ -1590,76 +1643,6 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
             </span>
           </section>
 
-          {/* Custom M3U8 Playlist Channels (10 custom sources parsed directly into Entertainment) */}
-          {customPlaylistChannels.length > 0 && (
-            <section
-              aria-label="Custom Entertainment playlist channels"
-              className="space-y-3 rounded-2xl border border-fuchsia-400/25 bg-[#071022]/85 p-4"
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h2 className="flex items-center gap-2 text-sm font-bold text-white">
-                  <Clapperboard className="h-4 w-4 text-fuchsia-400" aria-hidden="true" />
-                  <span>Custom Entertainment Playlists</span>
-                  <span className="rounded-md border border-fuchsia-400/35 bg-fuchsia-500/15 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-fuchsia-200">
-                    {customPlaylistChannels.length}
-                  </span>
-                </h2>
-                <span className="text-xs text-slate-400">
-                  Parsed from 10 custom M3U8 sources
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-                {customPlaylistChannels.map((ch) => {
-                  const isActive = selectedChannel?.id === ch.id;
-                  const health = channelHealth[ch.id];
-                  const isHttpStream = ch.url.startsWith('http://');
-                  return (
-                    <button
-                      key={ch.id}
-                      type="button"
-                      onClick={() => selectChannel(ch, true)}
-                      className={`flex items-center gap-2.5 rounded-2xl border p-2.5 text-left transition-colors ${
-                        isActive
-                          ? 'border-fuchsia-400/70 bg-fuchsia-500/18 text-white shadow-[0_0_20px_-10px_rgba(232,121,249,0.7)]'
-                          : 'border-white/[0.09] bg-slate-900/70 text-slate-200 hover:border-fuchsia-400/45 hover:bg-slate-900'
-                      }`}
-                    >
-                      <ChannelLogoBadge
-                        channel={ch}
-                        isBroken={Boolean(brokenLogos[ch.id])}
-                        isSelected={isActive}
-                        onBroken={markLogoBroken}
-                        size="sm"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5">
-                          <p className="truncate text-xs font-bold text-white" title={ch.name}>
-                            {ch.name}
-                          </p>
-                          {health === 'working' && (
-                            <span className="inline-flex shrink-0 items-center gap-0.5 rounded border border-emerald-400/40 bg-emerald-500/20 px-1 py-0.5 text-[9px] font-bold text-emerald-300">
-                              Live
-                            </span>
-                          )}
-                        </div>
-                        <p className="mt-0.5 truncate text-[11px] text-slate-400">
-                          Entertainment
-                          {ch.resolution ? ` · ${ch.resolution}` : ''}
-                          {isActive
-                            ? ' · Playing'
-                            : isHttpStream
-                              ? ' · HTTP Stream'
-                              : ' · Watch'}
-                        </p>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-          )}
-
           {/* Quick-Switch Live Channels Strip */}
           <section aria-label="Quick switch verified live channels" className="space-y-3">
             <div className="flex items-center justify-between gap-2">
@@ -1678,6 +1661,7 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
               {quickSwitchChannels.map((ch) => {
                 const isActive = selectedChannel?.id === ch.id;
                 const health = channelHealth[ch.id];
+                const locked = isChannelLocked(ch.id);
                 return (
                   <button
                     key={ch.id}
@@ -1686,7 +1670,9 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
                     className={`flex items-center gap-2.5 rounded-2xl border p-3 text-left transition-colors ${
                       isActive
                         ? 'border-fuchsia-400/60 bg-fuchsia-500/18 text-white'
-                        : 'border-white/[0.08] bg-slate-900/65 text-slate-200 hover:border-sky-400/40 hover:bg-slate-900'
+                        : locked
+                          ? 'border-white/[0.06] bg-slate-900/45 text-slate-400 hover:border-fuchsia-400/45 hover:bg-slate-900/80'
+                          : 'border-white/[0.08] bg-slate-900/65 text-slate-200 hover:border-sky-400/40 hover:bg-slate-900'
                     }`}
                   >
                     <ChannelLogoBadge
@@ -1697,14 +1683,19 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
                       size="sm"
                     />
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-xs font-bold">{ch.name}</p>
+                      <div className="flex items-center gap-1">
+                        <p className="truncate text-xs font-bold">{ch.name}</p>
+                        {locked && <Lock className="h-3 w-3 shrink-0 text-fuchsia-300" aria-hidden="true" />}
+                      </div>
                       <p className="truncate text-[11px] text-slate-400">
                         {CATEGORY_LABELS[ch.category]}
-                        {health === 'working'
-                          ? ' · Live'
-                          : ch.resolution
-                            ? ` · ${ch.resolution}`
-                            : ''}
+                        {locked
+                          ? ' · Pro'
+                          : health === 'working'
+                            ? ' · Live'
+                            : ch.resolution
+                              ? ` · ${ch.resolution}`
+                              : ''}
                       </p>
                     </div>
                   </button>
@@ -1810,9 +1801,7 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
 
           {/* Scrollable Windowed Channel Rows */}
           <div className="flex-1 divide-y divide-white/[0.05] overflow-y-auto">
-            {isLoadingPlaylist &&
-              channels.length <=
-                VERIFIED_SPOTLIGHT_CHANNELS.length + INITIAL_CUSTOM_ENTERTAINMENT_CHANNELS.length && (
+            {isLoadingPlaylist && channels.length <= VERIFIED_SPOTLIGHT_CHANNELS.length && (
               <div className="flex items-center justify-between gap-2 bg-sky-500/10 px-4 py-2.5 text-xs text-sky-200">
                 <span>Loading 10,000+ channels across {totalPlaylistsCount} master playlists…</span>
                 <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
@@ -1844,6 +1833,7 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
                 {renderedChannels.map((ch) => {
                   const isSelected = selectedChannel?.id === ch.id;
                   const health = channelHealth[ch.id];
+                  const locked = isChannelLocked(ch.id);
 
                   return (
                     <button
@@ -1879,11 +1869,6 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
                           >
                             {ch.name}
                           </p>
-                          {ch.isCustomPlaylist && (
-                            <span className="inline-flex shrink-0 items-center rounded-md border border-fuchsia-400/35 bg-fuchsia-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-fuchsia-200">
-                              Custom
-                            </span>
-                          )}
                           {health === 'working' && (
                             <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-400/40 bg-emerald-500/18 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300">
                               <CheckCircle2 className="h-2.5 w-2.5" aria-hidden="true" />
@@ -1911,18 +1896,25 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
                         </div>
                       </div>
 
-                      {/* Action Affordance */}
-                      <span
-                        className={`shrink-0 text-[11px] font-semibold ${
-                          isSelected
-                            ? 'text-sky-300'
-                            : health === 'offline'
-                              ? 'text-slate-500'
-                              : 'text-cyan-300'
-                        }`}
-                      >
-                        {isSelected ? 'Playing' : 'Watch'}
-                      </span>
+                      {/* Action Affordance / Pro Lock */}
+                      {locked ? (
+                        <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-fuchsia-400/45 bg-fuchsia-500/15 px-2 py-0.5 text-[10px] font-bold uppercase text-fuchsia-200">
+                          <Lock className="h-2.5 w-2.5 text-cyan-300" aria-hidden="true" />
+                          Pro
+                        </span>
+                      ) : (
+                        <span
+                          className={`shrink-0 text-[11px] font-semibold ${
+                            isSelected
+                              ? 'text-sky-300'
+                              : health === 'offline'
+                                ? 'text-slate-500'
+                                : 'text-cyan-300'
+                          }`}
+                        >
+                          {isSelected ? 'Playing' : 'Watch'}
+                        </span>
+                      )}
                     </button>
                   );
                 })}
