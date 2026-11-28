@@ -34,6 +34,7 @@ import {
   CATEGORY_TABS,
   clearCachedChannelHealth,
   getCachedHealthSnapshot,
+  INITIAL_CUSTOM_ENTERTAINMENT_CHANNELS,
   loadEntertainmentChannels,
   probeHlsStream,
   setCachedChannelHealth,
@@ -87,9 +88,88 @@ function CategoryIcon({
   }
 }
 
+function getChannelMonogram(name: string): string {
+  const cleaned = name
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .trim();
+  if (!cleaned) return '';
+  const words = cleaned.split(/\s+/).filter(Boolean);
+  if (words.length === 1) {
+    return words[0].slice(0, 3).toUpperCase();
+  }
+  const first = words[0];
+  const second = words[1];
+  if (first.length <= 3 && /^\d+$/.test(second)) {
+    return `${first.slice(0, 2)}${second}`.toUpperCase();
+  }
+  return `${first[0] || ''}${second[0] || ''}`.toUpperCase();
+}
+
+function ChannelLogoBadge({
+  channel,
+  isBroken,
+  isSelected,
+  onBroken,
+  size = 'md',
+}: {
+  channel: EntertainmentChannel;
+  isBroken: boolean;
+  isSelected: boolean;
+  onBroken: (channelId: string) => void;
+  size?: 'sm' | 'md';
+}) {
+  const showLogo = Boolean(channel.logo && !isBroken);
+  const monogram = channel.isCustomPlaylist ? getChannelMonogram(channel.name) : '';
+  const boxClass =
+    size === 'sm'
+      ? 'h-9 w-9 rounded-xl'
+      : 'h-10 w-10 rounded-xl';
+  const imgClass = size === 'sm' ? 'h-7 w-7 object-contain' : 'h-8 w-8 object-contain';
+
+  return (
+    <div
+      className={`flex ${boxClass} shrink-0 items-center justify-center overflow-hidden border ${
+        isSelected
+          ? 'border-sky-400/50 bg-sky-500/15'
+          : channel.isCustomPlaylist
+            ? 'border-fuchsia-400/30 bg-gradient-to-br from-fuchsia-500/20 via-slate-950 to-cyan-500/20'
+            : 'border-white/10 bg-slate-950/90'
+      }`}
+    >
+      {showLogo ? (
+        <img
+          src={channel.logo}
+          alt={channel.name}
+          referrerPolicy="no-referrer"
+          loading="lazy"
+          onError={() => onBroken(channel.id)}
+          className={imgClass}
+        />
+      ) : monogram ? (
+        <span
+          aria-hidden="true"
+          className={`font-black tracking-tight ${
+            size === 'sm' ? 'text-[11px]' : 'text-xs'
+          } ${isSelected ? 'text-sky-200' : 'text-fuchsia-200'}`}
+        >
+          {monogram}
+        </span>
+      ) : (
+        <CategoryIcon
+          category={channel.category}
+          className={`h-4 w-4 ${isSelected ? 'text-sky-300' : 'text-slate-400'}`}
+        />
+      )}
+    </div>
+  );
+}
+
 export const EntertainmentLivePage: React.FC = React.memo(() => {
   const [channels, setChannels] = useState<EntertainmentChannel[]>(() => [
     ...VERIFIED_SPOTLIGHT_CHANNELS,
+    ...INITIAL_CUSTOM_ENTERTAINMENT_CHANNELS,
   ]);
   const [isLoadingPlaylist, setIsLoadingPlaylist] = useState<boolean>(true);
   const [loadedPlaylistsCount, setLoadedPlaylistsCount] = useState<number>(0);
@@ -197,9 +277,9 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
         queue.push(ch);
       };
 
-      // 1. Prioritize spotlight & currently active category top candidates first
+      // 1. Prioritize spotlight, custom playlists & currently active category top candidates first
       for (const ch of channels) {
-        if (ch.featured) pushIfUntested(ch);
+        if (ch.featured || ch.isCustomPlaylist) pushIfUntested(ch);
       }
 
       const currentCat = activeCategoryRef.current;
@@ -442,6 +522,17 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
     return () => observer.disconnect();
   }, [visibleLimit, sortedFilteredChannels.length]);
 
+  // Custom M3U8 playlist channels parsed from the 10 custom sources (always visible in Entertainment / All)
+  const customPlaylistChannels = useMemo(() => {
+    const q = deferredSearchQuery.trim().toLowerCase();
+    return channels.filter((ch) => {
+      if (!ch.isCustomPlaylist) return false;
+      if (activeCategory !== 'all' && !ch.categories.includes(activeCategory)) return false;
+      if (q && !ch.searchText.includes(q)) return false;
+      return true;
+    });
+  }, [channels, activeCategory, deferredSearchQuery]);
+
   // Quick-switch spotlight cards: prefer verified working channels first across categories
   const quickSwitchChannels = useMemo(() => {
     const verified = sortedFilteredChannels.filter((c) => channelHealth[c.id] === 'working');
@@ -457,6 +548,10 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
     }
     return merged.slice(0, 8);
   }, [sortedFilteredChannels, channelHealth]);
+
+  const markLogoBroken = useCallback((channelId: string) => {
+    setBrokenLogos((prev) => (prev[channelId] ? prev : { ...prev, [channelId]: true }));
+  }, []);
 
   // Find next working channel: strictly prefers already-verified 'working' channels first, then untested
   const findNextWorkingChannel = useCallback(
@@ -916,9 +1011,16 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
             return;
           }
 
+          const isMixedHttpOnHttps =
+            typeof window !== 'undefined' &&
+            window.location.protocol === 'https:' &&
+            activeChannelUrl.startsWith('http://');
+
           beginStabilityCheck(
             'Stream connection lost — verifying availability…',
-            'Channel stream is offline or restricted by broadcaster CORS headers.'
+            isMixedHttpOnHttps
+              ? 'This custom stream uses HTTP and may be blocked by browser HTTPS security, or is currently offline.'
+              : 'Channel stream is offline or restricted by broadcaster CORS headers.'
           );
           return;
         }
@@ -1488,6 +1590,76 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
             </span>
           </section>
 
+          {/* Custom M3U8 Playlist Channels (10 custom sources parsed directly into Entertainment) */}
+          {customPlaylistChannels.length > 0 && (
+            <section
+              aria-label="Custom Entertainment playlist channels"
+              className="space-y-3 rounded-2xl border border-fuchsia-400/25 bg-[#071022]/85 p-4"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="flex items-center gap-2 text-sm font-bold text-white">
+                  <Clapperboard className="h-4 w-4 text-fuchsia-400" aria-hidden="true" />
+                  <span>Custom Entertainment Playlists</span>
+                  <span className="rounded-md border border-fuchsia-400/35 bg-fuchsia-500/15 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-fuchsia-200">
+                    {customPlaylistChannels.length}
+                  </span>
+                </h2>
+                <span className="text-xs text-slate-400">
+                  Parsed from 10 custom M3U8 sources
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+                {customPlaylistChannels.map((ch) => {
+                  const isActive = selectedChannel?.id === ch.id;
+                  const health = channelHealth[ch.id];
+                  const isHttpStream = ch.url.startsWith('http://');
+                  return (
+                    <button
+                      key={ch.id}
+                      type="button"
+                      onClick={() => selectChannel(ch, true)}
+                      className={`flex items-center gap-2.5 rounded-2xl border p-2.5 text-left transition-colors ${
+                        isActive
+                          ? 'border-fuchsia-400/70 bg-fuchsia-500/18 text-white shadow-[0_0_20px_-10px_rgba(232,121,249,0.7)]'
+                          : 'border-white/[0.09] bg-slate-900/70 text-slate-200 hover:border-fuchsia-400/45 hover:bg-slate-900'
+                      }`}
+                    >
+                      <ChannelLogoBadge
+                        channel={ch}
+                        isBroken={Boolean(brokenLogos[ch.id])}
+                        isSelected={isActive}
+                        onBroken={markLogoBroken}
+                        size="sm"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <p className="truncate text-xs font-bold text-white" title={ch.name}>
+                            {ch.name}
+                          </p>
+                          {health === 'working' && (
+                            <span className="inline-flex shrink-0 items-center gap-0.5 rounded border border-emerald-400/40 bg-emerald-500/20 px-1 py-0.5 text-[9px] font-bold text-emerald-300">
+                              Live
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-0.5 truncate text-[11px] text-slate-400">
+                          Entertainment
+                          {ch.resolution ? ` · ${ch.resolution}` : ''}
+                          {isActive
+                            ? ' · Playing'
+                            : isHttpStream
+                              ? ' · HTTP Stream'
+                              : ' · Watch'}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
           {/* Quick-Switch Live Channels Strip */}
           <section aria-label="Quick switch verified live channels" className="space-y-3">
             <div className="flex items-center justify-between gap-2">
@@ -1517,9 +1689,13 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
                         : 'border-white/[0.08] bg-slate-900/65 text-slate-200 hover:border-sky-400/40 hover:bg-slate-900'
                     }`}
                   >
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-white/[0.07] text-cyan-300">
-                      <CategoryIcon category={ch.category} className="h-4 w-4" />
-                    </span>
+                    <ChannelLogoBadge
+                      channel={ch}
+                      isBroken={Boolean(brokenLogos[ch.id])}
+                      isSelected={isActive}
+                      onBroken={markLogoBroken}
+                      size="sm"
+                    />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-xs font-bold">{ch.name}</p>
                       <p className="truncate text-[11px] text-slate-400">
@@ -1634,7 +1810,9 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
 
           {/* Scrollable Windowed Channel Rows */}
           <div className="flex-1 divide-y divide-white/[0.05] overflow-y-auto">
-            {isLoadingPlaylist && channels.length <= VERIFIED_SPOTLIGHT_CHANNELS.length && (
+            {isLoadingPlaylist &&
+              channels.length <=
+                VERIFIED_SPOTLIGHT_CHANNELS.length + INITIAL_CUSTOM_ENTERTAINMENT_CHANNELS.length && (
               <div className="flex items-center justify-between gap-2 bg-sky-500/10 px-4 py-2.5 text-xs text-sky-200">
                 <span>Loading 10,000+ channels across {totalPlaylistsCount} master playlists…</span>
                 <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
@@ -1666,7 +1844,6 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
                 {renderedChannels.map((ch) => {
                   const isSelected = selectedChannel?.id === ch.id;
                   const health = channelHealth[ch.id];
-                  const showLogo = Boolean(ch.logo && !brokenLogos[ch.id]);
 
                   return (
                     <button
@@ -1681,28 +1858,14 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
                             : 'bg-transparent text-slate-200 hover:bg-white/[0.05]'
                       }`}
                     >
-                      {/* Channel Logo or Category Icon Fallback */}
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-slate-950/90">
-                        {showLogo ? (
-                          <img
-                            src={ch.logo}
-                            alt={ch.name}
-                            referrerPolicy="no-referrer"
-                            loading="lazy"
-                            onError={() =>
-                              setBrokenLogos((prev) => ({ ...prev, [ch.id]: true }))
-                            }
-                            className="h-8 w-8 object-contain"
-                          />
-                        ) : (
-                          <CategoryIcon
-                            category={ch.category}
-                            className={`h-4 w-4 ${
-                              isSelected ? 'text-sky-300' : 'text-slate-400'
-                            }`}
-                          />
-                        )}
-                      </div>
+                      {/* Channel Logo (tvg-logo) or Safe Fallback Badge */}
+                      <ChannelLogoBadge
+                        channel={ch}
+                        isBroken={Boolean(brokenLogos[ch.id])}
+                        isSelected={isSelected}
+                        onBroken={markLogoBroken}
+                        size="md"
+                      />
 
                       {/* Title & Clean Metadata with Explicit Live / Offline Status */}
                       <div className="min-w-0 flex-1">
@@ -1716,6 +1879,11 @@ export const EntertainmentLivePage: React.FC = React.memo(() => {
                           >
                             {ch.name}
                           </p>
+                          {ch.isCustomPlaylist && (
+                            <span className="inline-flex shrink-0 items-center rounded-md border border-fuchsia-400/35 bg-fuchsia-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-fuchsia-200">
+                              Custom
+                            </span>
+                          )}
                           {health === 'working' && (
                             <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-400/40 bg-emerald-500/18 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300">
                               <CheckCircle2 className="h-2.5 w-2.5" aria-hidden="true" />
