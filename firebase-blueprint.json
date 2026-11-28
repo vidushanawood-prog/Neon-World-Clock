@@ -254,6 +254,107 @@
         "message",
         "createdAt"
       ]
+    },
+    "PaymentReceiptCode": {
+      "title": "PaymentReceiptCode",
+      "description": "30-minute rotating per-user unique payment receipt reference code recorded at paymentReceiptCodes/{codeId} to prevent duplicate receipt reuse.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 14,
+          "maxLength": 20,
+          "pattern": "^NWC-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{2}$",
+          "description": "Unique 30-minute rotating receipt reference code matching the document ID."
+        },
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the verified user who owns this payment receipt code."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 254,
+          "description": "Autofilled email address of the signed-in user."
+        },
+        "phone": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 30,
+          "description": "Optional phone number entered by the user, or empty string."
+        },
+        "countryName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Auto-detected country name."
+        },
+        "countryCode": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 4,
+          "description": "ISO country code."
+        },
+        "currencyCode": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 6,
+          "description": "Auto-detected local currency code."
+        },
+        "localTotalDisplay": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Calculated local currency total displayed to the user."
+        },
+        "windowIndex": {
+          "type": "integer",
+          "description": "30-minute rotation time window index (floor(epochMs / 1800000))."
+        },
+        "windowExpiresAt": {
+          "type": "integer",
+          "description": "Unix epoch timestamp in milliseconds when this 30-minute code window expires."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["generated", "submitted", "used", "expired"],
+          "description": "Lifecycle status for anti-reuse enforcement; used/expired are terminal states for owners."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Immutable Firestore server timestamp when this code was first recorded."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Firestore server timestamp of the latest status update."
+        },
+        "submittedAt": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "Firestore server timestamp when the user launched WhatsApp payment submission, or null."
+        }
+      },
+      "required": [
+        "code",
+        "uid",
+        "email",
+        "phone",
+        "countryName",
+        "countryCode",
+        "currencyCode",
+        "localTotalDisplay",
+        "windowIndex",
+        "windowExpiresAt",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -274,6 +375,12 @@
         "$ref": "#/entities/ReceiptEmail"
       },
       "description": "Create-only immutable receipt email records for Firebase Trigger Email extension."
+    },
+    "/paymentReceiptCodes/{codeId}": {
+      "schema": {
+        "$ref": "#/entities/PaymentReceiptCode"
+      },
+      "description": "Unique 30-minute rotating payment receipt codes keyed by codeId to prevent duplicate receipt reuse."
     }
   }
 }

@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Crown,
   LogOut,
+  Receipt,
   Search,
   Shield,
   ShieldAlert,
@@ -21,7 +22,13 @@ import {
   subscribeToAllUsers,
   type FirestoreUserProfile,
 } from '../lib/firebase';
-import { formatShortDate, getDaysRemaining, isProActive } from '../services/subscription';
+import {
+  adminUpdateReceiptCodeStatus,
+  subscribeToAllReceiptCodes,
+  type FirestorePaymentReceiptCode,
+  type ReceiptCodeStatus,
+} from '../services/paymentReceiptCode';
+import { formatReceiptDateTime, formatShortDate, getDaysRemaining, isProActive } from '../services/subscription';
 
 interface SecretAdminDashboardProps {
   isOpen: boolean;
@@ -39,11 +46,14 @@ export const SecretAdminDashboard: React.FC<SecretAdminDashboardProps> = ({
   onSignOutAndSwitch,
 }) => {
   const [users, setUsers] = useState<FirestoreUserProfile[]>([]);
+  const [receiptCodes, setReceiptCodes] = useState<FirestorePaymentReceiptCode[]>([]);
+  const [adminSection, setAdminSection] = useState<'users' | 'receipts'>('users');
   const [loading, setLoading] = useState(true);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterTab, setFilterTab] = useState<'all' | 'pro' | 'free' | 'banned'>('all');
   const [busyUid, setBusyUid] = useState<string | null>(null);
+  const [busyCodeId, setBusyCodeId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [confirmDeleteUser, setConfirmDeleteUser] = useState<FirestoreUserProfile | null>(null);
 
@@ -75,7 +85,19 @@ export const SecretAdminDashboard: React.FC<SecretAdminDashboardProps> = ({
       }
     );
 
-    return () => unsubscribe();
+    const unsubscribeCodes = subscribeToAllReceiptCodes(
+      (codes) => {
+        setReceiptCodes(codes);
+      },
+      () => {
+        // Permission notice is already surfaced via subscribeToAllUsers
+      }
+    );
+
+    return () => {
+      unsubscribe();
+      unsubscribeCodes();
+    };
   }, [isOpen, currentUserEmail]);
 
   useEffect(() => {
@@ -107,7 +129,40 @@ export const SecretAdminDashboard: React.FC<SecretAdminDashboardProps> = ({
     });
   }, [users, searchQuery, filterTab]);
 
+  const filteredReceiptCodes = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return receiptCodes;
+    return receiptCodes.filter(
+      (c) =>
+        c.code.toLowerCase().includes(q) ||
+        c.email.toLowerCase().includes(q) ||
+        c.phone.toLowerCase().includes(q) ||
+        c.countryName.toLowerCase().includes(q)
+    );
+  }, [receiptCodes, searchQuery]);
+
   if (!isOpen) return null;
+
+  const handleSetReceiptStatus = async (
+    item: FirestorePaymentReceiptCode,
+    status: ReceiptCodeStatus
+  ) => {
+    setBusyCodeId(item.code);
+    try {
+      await adminUpdateReceiptCodeStatus(item.code, status);
+      setToast({
+        kind: 'ok',
+        text: `Receipt code ${item.code} marked as ${status.toUpperCase()}.`,
+      });
+    } catch (err) {
+      setToast({
+        kind: 'err',
+        text: err instanceof Error ? err.message : 'Failed to update receipt code.',
+      });
+    } finally {
+      setBusyCodeId(null);
+    }
+  };
 
   const handleTogglePlan = async (target: FirestoreUserProfile) => {
     setBusyUid(target.uid);
@@ -303,6 +358,34 @@ export const SecretAdminDashboard: React.FC<SecretAdminDashboardProps> = ({
             </div>
           )}
 
+          {/* Top Section Switcher: Users vs Anti-Reuse Receipt Codes */}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setAdminSection('users')}
+              className={`inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition ${
+                adminSection === 'users'
+                  ? 'border border-cyan-400/50 bg-cyan-500/20 text-cyan-200'
+                  : 'border border-white/10 bg-slate-900/80 text-slate-400 hover:text-white'
+              }`}
+            >
+              <Users className="h-3.5 w-3.5" />
+              Users ({stats.total})
+            </button>
+            <button
+              type="button"
+              onClick={() => setAdminSection('receipts')}
+              className={`inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold transition ${
+                adminSection === 'receipts'
+                  ? 'border border-emerald-400/50 bg-emerald-500/20 text-emerald-200'
+                  : 'border border-white/10 bg-slate-900/80 text-slate-400 hover:text-white'
+              }`}
+            >
+              <Receipt className="h-3.5 w-3.5" />
+              Receipt Codes ({receiptCodes.length})
+            </button>
+          </div>
+
           {/* Search + Filter Controls */}
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="relative flex-1">
@@ -311,38 +394,138 @@ export const SecretAdminDashboard: React.FC<SecretAdminDashboardProps> = ({
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search users by email, name, or UID..."
+                placeholder={
+                  adminSection === 'users'
+                    ? 'Search users by email, name, or UID...'
+                    : 'Search receipt codes by NWC code, email, phone, or country...'
+                }
                 className="w-full rounded-2xl border border-white/15 bg-slate-900/90 py-2.5 pl-10 pr-4 text-sm text-white placeholder:text-slate-500 focus:border-cyan-400/60 focus:outline-none focus:ring-2 focus:ring-cyan-400/20"
               />
             </div>
 
-            <div className="flex flex-wrap items-center gap-1.5">
-              {(
-                [
-                  { id: 'all', label: `All (${stats.total})` },
-                  { id: 'pro', label: `Pro (${stats.pro})` },
-                  { id: 'free', label: `Free (${stats.free})` },
-                  { id: 'banned', label: `Banned (${stats.banned})` },
-                ] as const
-              ).map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setFilterTab(tab.id)}
-                  className={`rounded-xl px-3 py-2 text-xs font-semibold transition ${
-                    filterTab === tab.id
-                      ? 'border border-cyan-400/50 bg-cyan-500/20 text-cyan-200'
-                      : 'border border-white/10 bg-slate-900/80 text-slate-400 hover:border-white/25 hover:text-white'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
+            {adminSection === 'users' && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {(
+                  [
+                    { id: 'all', label: `All (${stats.total})` },
+                    { id: 'pro', label: `Pro (${stats.pro})` },
+                    { id: 'free', label: `Free (${stats.free})` },
+                    { id: 'banned', label: `Banned (${stats.banned})` },
+                  ] as const
+                ).map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setFilterTab(tab.id)}
+                    className={`rounded-xl px-3 py-2 text-xs font-semibold transition ${
+                      filterTab === tab.id
+                        ? 'border border-cyan-400/50 bg-cyan-500/20 text-cyan-200'
+                        : 'border border-white/10 bg-slate-900/80 text-slate-400 hover:border-white/25 hover:text-white'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
+          {adminSection === 'receipts' ? (
+            filteredReceiptCodes.length === 0 ? (
+              <div className="rounded-2xl border border-white/10 bg-slate-900/50 p-10 text-center text-sm text-slate-400">
+                No payment receipt codes recorded yet.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {filteredReceiptCodes.map((rc) => {
+                  const isExpiredNow =
+                    rc.status !== 'used' && rc.windowExpiresAt > 0 && Date.now() > rc.windowExpiresAt;
+                  const isBusy = busyCodeId === rc.code;
+                  return (
+                    <div
+                      key={rc.code}
+                      className={`flex flex-col justify-between gap-3 rounded-2xl border p-4 lg:flex-row lg:items-center ${
+                        rc.status === 'used'
+                          ? 'border-rose-500/35 bg-rose-950/15'
+                          : rc.status === 'submitted'
+                            ? 'border-emerald-400/35 bg-emerald-950/15'
+                            : 'border-white/10 bg-slate-900/70'
+                      }`}
+                    >
+                      <div className="min-w-0 space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <code className="font-mono text-sm font-black tracking-wider text-cyan-200">
+                            {rc.code}
+                          </code>
+                          <span
+                            className={`rounded-md px-2 py-0.5 text-[10px] font-bold uppercase ${
+                              rc.status === 'used'
+                                ? 'border border-rose-400/40 bg-rose-500/20 text-rose-200'
+                                : rc.status === 'submitted'
+                                  ? 'border border-emerald-400/40 bg-emerald-500/20 text-emerald-200'
+                                  : isExpiredNow
+                                    ? 'border border-slate-600 bg-slate-800 text-slate-400'
+                                    : 'border border-cyan-400/40 bg-cyan-500/15 text-cyan-200'
+                            }`}
+                          >
+                            {rc.status === 'used'
+                              ? 'USED (LOCKED)'
+                              : isExpiredNow
+                                ? 'WINDOW EXPIRED'
+                                : rc.status}
+                          </span>
+                          <span className="rounded-md border border-white/10 bg-slate-950/80 px-2 py-0.5 font-mono text-[11px] font-semibold text-white">
+                            {rc.localTotalDisplay} ({rc.currencyCode})
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-300">
+                          <span className="font-mono">{rc.email}</span>
+                          <span className="text-slate-600">•</span>
+                          <span>Phone: {rc.phone || 'Not provided'}</span>
+                          <span className="text-slate-600">•</span>
+                          <span>
+                            {rc.countryName} ({rc.countryCode})
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-400">
+                          Window expires:{' '}
+                          <strong className="text-slate-300">
+                            {rc.windowExpiresAt ? formatReceiptDateTime(rc.windowExpiresAt) : '—'}
+                          </strong>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        {rc.status !== 'used' ? (
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => void handleSetReceiptStatus(rc, 'used')}
+                            className="inline-flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-emerald-400 to-cyan-400 px-3.5 py-2 text-xs font-extrabold text-slate-950 transition hover:brightness-110 disabled:opacity-50"
+                          >
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                            Mark Used (Anti-Reuse)
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => void handleSetReceiptStatus(rc, 'submitted')}
+                            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-600 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-300 hover:text-white disabled:opacity-50"
+                          >
+                            Reopen Code
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )
+          ) : null}
+
           {/* User Table / List */}
-          {loading ? (
+          {adminSection === 'users' && (loading ? (
             <div className="rounded-2xl border border-white/10 bg-slate-900/50 p-10 text-center text-sm text-slate-400">
               Connecting to Firestore user directory...
             </div>
@@ -485,7 +668,7 @@ export const SecretAdminDashboard: React.FC<SecretAdminDashboardProps> = ({
                 );
               })}
             </div>
-          )}
+          ))}
         </div>
       </div>
 

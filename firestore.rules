@@ -15,6 +15,10 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 12 && id.matches('^[0-9]+$');
     }
 
+    function isValidReceiptCodeId(id) {
+      return id is string && id.size() >= 14 && id.size() <= 20 && id.matches('^NWC-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{2}$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -225,6 +229,76 @@ service cloud.firestore {
       );
     }
 
+    // Validation Blueprint for PaymentReceiptCode (/paymentReceiptCodes/{codeId})
+    function isValidPaymentReceiptCode(data, codeId) {
+      return (
+        data.keys().hasAll([
+          'code',
+          'uid',
+          'email',
+          'phone',
+          'countryName',
+          'countryCode',
+          'currencyCode',
+          'localTotalDisplay',
+          'windowIndex',
+          'windowExpiresAt',
+          'status',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'code',
+          'uid',
+          'email',
+          'phone',
+          'countryName',
+          'countryCode',
+          'currencyCode',
+          'localTotalDisplay',
+          'windowIndex',
+          'windowExpiresAt',
+          'status',
+          'createdAt',
+          'updatedAt',
+          'submittedAt'
+        ]) &&
+        data.code is string &&
+        isValidReceiptCodeId(data.code) &&
+        data.code == codeId &&
+        data.uid is string &&
+        isValidId(data.uid) &&
+        data.email is string &&
+        data.email.size() >= 3 &&
+        data.email.size() <= 254 &&
+        data.phone is string &&
+        data.phone.size() <= 30 &&
+        data.countryName is string &&
+        data.countryName.size() >= 1 &&
+        data.countryName.size() <= 80 &&
+        data.countryCode is string &&
+        data.countryCode.size() >= 2 &&
+        data.countryCode.size() <= 4 &&
+        data.currencyCode is string &&
+        data.currencyCode.size() >= 3 &&
+        data.currencyCode.size() <= 6 &&
+        data.localTotalDisplay is string &&
+        data.localTotalDisplay.size() >= 1 &&
+        data.localTotalDisplay.size() <= 60 &&
+        data.windowIndex is int &&
+        data.windowIndex >= 876576 &&
+        data.windowIndex <= 2279136 &&
+        data.windowExpiresAt is int &&
+        data.windowExpiresAt >= 1577836800000 &&
+        data.windowExpiresAt <= 4102444800000 &&
+        data.status is string &&
+        data.status in ['generated', 'submitted', 'used', 'expired'] &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp &&
+        (!('submittedAt' in data) || data.submittedAt == null || data.submittedAt is timestamp)
+      );
+    }
+
     // Verified User Profiles & Freemium/Pro Subscriptions (/users/{uid})
     match /users/{uid} {
       // Owning user or bootstrapped admin may read individual profile
@@ -423,6 +497,70 @@ service cloud.firestore {
 
       // Receipts are strictly immutable audit records
       allow update, delete: if false;
+    }
+
+    // 30-Minute Rotating Unique Payment Receipt Codes (/paymentReceiptCodes/{codeId})
+    // Keyed by exact unique codeId to enforce global anti-reuse uniqueness across all users
+    match /paymentReceiptCodes/{codeId} {
+      // Strictly isolated PII (email/phone): only owning user or bootstrapped admin may read
+      allow get: if isValidReceiptCodeId(codeId) && (isBootstrappedAdmin() || (isSignedIn() && existing().uid == request.auth.uid));
+      allow list: if isBootstrappedAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+
+      // Verified user records their newly generated/submitted 30-minute unique code (cannot overwrite existing code)
+      allow create: if isVerifiedUser() &&
+        isValidReceiptCodeId(codeId) &&
+        isValidPaymentReceiptCode(incoming(), codeId) &&
+        incoming().uid == request.auth.uid &&
+        request.auth.token.email is string &&
+        incoming().email.lower() == request.auth.token.email.lower() &&
+        incoming().status in ['generated', 'submitted'] &&
+        incoming().windowExpiresAt <= request.time.toMillis() + 3600000 &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (!('submittedAt' in incoming()) || incoming().submittedAt == null || incoming().submittedAt == request.time) &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid));
+
+      // Action-Based Updates with Terminal State Locking ('used' and 'expired' are locked against owner changes)
+      allow update: if isValidReceiptCodeId(codeId) &&
+        isValidPaymentReceiptCode(incoming(), codeId) &&
+        incoming().code == existing().code &&
+        incoming().uid == existing().uid &&
+        incoming().email == existing().email &&
+        incoming().windowIndex == existing().windowIndex &&
+        incoming().windowExpiresAt == existing().windowExpiresAt &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          // Action 1: Bootstrapped Admin marks a receipt code as used, expired, or resets state
+          (
+            isBootstrappedAdmin() &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'status',
+              'updatedAt'
+            ])
+          ) ||
+          // Action 2: Verified owner submits their active (non-terminal) receipt code via WhatsApp
+          (
+            isVerifiedUser() &&
+            existing().uid == request.auth.uid &&
+            existing().status in ['generated', 'submitted'] &&
+            incoming().status == 'submitted' &&
+            (!('submittedAt' in incoming()) || incoming().submittedAt == request.time) &&
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'phone',
+              'countryName',
+              'countryCode',
+              'currencyCode',
+              'localTotalDisplay',
+              'status',
+              'submittedAt',
+              'updatedAt'
+            ])
+          )
+        );
+
+      // Only bootstrapped admin may remove receipt code records (owners cannot erase anti-reuse history)
+      allow delete: if isValidReceiptCodeId(codeId) && isBootstrappedAdmin();
     }
   }
 }
